@@ -1,0 +1,1614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ProctorAI — Identity Verification</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,300&display=swap" rel="stylesheet" />
+<style>
+/* ═══════════════════════════════════════════════════
+   DESIGN SYSTEM — Dark Tactical / Industrial Precision
+   ═══════════════════════════════════════════════════ */
+:root {
+  --bg:         #080b0f;
+  --bg2:        #0e1318;
+  --bg3:        #141b22;
+  --panel:      #111820;
+  --border:     #1e2d3d;
+  --border2:    #253445;
+  --text:       #c8d8e8;
+  --text2:      #7a9ab5;
+  --text3:      #3d5570;
+  --accent:     #00d4ff;
+  --accent2:    #0099bb;
+  --green:      #00ff88;
+  --green2:     #00cc6a;
+  --red:        #ff3d5a;
+  --red2:       #cc2040;
+  --amber:      #ffaa00;
+  --amber2:     #cc8800;
+  --glow-g:     0 0 20px rgba(0,255,136,0.3);
+  --glow-r:     0 0 20px rgba(255,61,90,0.3);
+  --glow-a:     0 0 20px rgba(0,212,255,0.25);
+  --glow-y:     0 0 20px rgba(255,170,0,0.3);
+  --radius:     8px;
+  --radius2:    14px;
+  --transition: 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+  --font-mono:  'Space Mono', monospace;
+  --font-body:  'DM Sans', sans-serif;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1.6;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* grid noise texture overlay */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(0,212,255,0.015) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,212,255,0.015) 1px, transparent 1px);
+  background-size: 40px 40px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ── Layout ─────────────────────────────────────────── */
+#app { position: relative; z-index: 1; min-height: 100vh; display: flex; flex-direction: column; }
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  height: 56px;
+  background: rgba(8,11,15,0.9);
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(12px);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.logo-icon {
+  width: 28px; height: 28px;
+  border: 2px solid var(--accent);
+  border-radius: 6px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px;
+  box-shadow: var(--glow-a);
+}
+.logo-dot {
+  width: 6px; height: 6px;
+  background: var(--green);
+  border-radius: 50%;
+  box-shadow: 0 0 8px var(--green);
+  animation: pulse 2s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%,100% { opacity: 1; transform: scale(1); }
+  50%     { opacity: 0.5; transform: scale(0.8); }
+}
+
+.nav-tabs {
+  display: flex;
+  gap: 2px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 3px;
+}
+.nav-tab {
+  padding: 6px 18px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text2);
+  border: none;
+  background: transparent;
+  transition: var(--transition);
+}
+.nav-tab:hover { color: var(--text); }
+.nav-tab.active {
+  background: var(--bg3);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--border2);
+}
+
+.status-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text3);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* ── Main Content ───────────────────────────────────── */
+.main { flex: 1; padding: 32px 24px; max-width: 960px; margin: 0 auto; width: 100%; }
+
+/* ── Pages ──────────────────────────────────────────── */
+.page { display: none; animation: pageIn 0.3s ease; }
+.page.active { display: block; }
+@keyframes pageIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+/* ── Section header ─────────────────────────────────── */
+.section-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  margin-bottom: 28px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.section-title {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--accent);
+  margin-bottom: 6px;
+}
+.section-heading {
+  font-family: var(--font-body);
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.2;
+}
+.section-desc {
+  font-size: 13px;
+  color: var(--text2);
+  max-width: 420px;
+}
+
+/* ── Card ───────────────────────────────────────────── */
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius2);
+  padding: 24px;
+  position: relative;
+  overflow: hidden;
+  transition: var(--transition);
+}
+.card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--border2), transparent);
+}
+.card:hover { border-color: var(--border2); }
+
+.card-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text3);
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.card-label::before {
+  content: '';
+  display: inline-block;
+  width: 3px; height: 12px;
+  background: var(--accent);
+  border-radius: 2px;
+}
+
+/* ── Two-col grid ───────────────────────────────────── */
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+@media (max-width: 680px) { .grid-2 { grid-template-columns: 1fr; } }
+
+/* ── Form elements ──────────────────────────────────── */
+.form-group { margin-bottom: 18px; }
+label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text2);
+  margin-bottom: 8px;
+}
+input[type="text"], input[type="file"] {
+  width: 100%;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  outline: none;
+  transition: var(--transition);
+}
+input[type="text"]:focus {
+  border-color: var(--accent2);
+  box-shadow: 0 0 0 2px rgba(0,212,255,0.1);
+}
+input[type="file"] { cursor: pointer; }
+input::placeholder { color: var(--text3); }
+
+/* Custom file upload area */
+.upload-area {
+  border: 2px dashed var(--border2);
+  border-radius: var(--radius2);
+  padding: 36px 24px;
+  text-align: center;
+  cursor: pointer;
+  transition: var(--transition);
+  background: var(--bg2);
+  position: relative;
+  overflow: hidden;
+}
+.upload-area:hover { border-color: var(--accent2); background: var(--bg3); }
+.upload-area.drag-over { border-color: var(--accent); background: rgba(0,212,255,0.05); }
+.upload-area.has-file { border-color: var(--green2); border-style: solid; background: rgba(0,255,136,0.03); }
+.upload-area input[type="file"] {
+  position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+}
+.upload-icon { font-size: 28px; margin-bottom: 10px; opacity: 0.6; }
+.upload-text { color: var(--text2); font-size: 13px; }
+.upload-hint { color: var(--text3); font-size: 11px; margin-top: 4px; }
+.upload-preview {
+  width: 80px; height: 80px;
+  border-radius: 8px;
+  object-fit: cover;
+  margin: 0 auto 10px;
+  display: none;
+  border: 2px solid var(--green2);
+  box-shadow: var(--glow-g);
+}
+.upload-preview.show { display: block; }
+
+/* ── Buttons ─────────────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 11px 24px;
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: var(--transition);
+  position: relative;
+  overflow: hidden;
+}
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: white;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.btn:active:not(:disabled)::after { opacity: 0.05; }
+
+.btn-primary {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+}
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent2);
+  box-shadow: 0 0 16px rgba(0,212,255,0.35);
+  transform: translateY(-1px);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text2);
+  border-color: var(--border2);
+}
+.btn-ghost:hover:not(:disabled) { color: var(--text); border-color: var(--text3); }
+
+.btn-danger {
+  background: transparent;
+  color: var(--red);
+  border-color: var(--red2);
+}
+.btn-danger:hover:not(:disabled) { background: rgba(255,61,90,0.08); }
+
+.btn-full { width: 100%; }
+
+/* ── Webcam area ─────────────────────────────────────── */
+.webcam-container {
+  position: relative;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius2);
+  overflow: hidden;
+  aspect-ratio: 4/3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.webcam-container video,
+.webcam-container canvas {
+  width: 100%; height: 100%; object-fit: cover;
+}
+.webcam-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+/* Corner brackets */
+.webcam-overlay::before,
+.webcam-overlay::after {
+  content: '';
+  position: absolute;
+  width: 28px; height: 28px;
+  border-color: var(--accent);
+  border-style: solid;
+  opacity: 0.7;
+}
+.webcam-overlay::before { top: 12px; left: 12px; border-width: 2px 0 0 2px; border-radius: 4px 0 0 0; }
+.webcam-overlay::after  { top: 12px; right: 12px; border-width: 2px 2px 0 0; border-radius: 0 4px 0 0; }
+.webcam-overlay-br,
+.webcam-overlay-bl {
+  position: absolute;
+  width: 28px; height: 28px;
+  border-color: var(--accent);
+  border-style: solid;
+  opacity: 0.7;
+}
+.webcam-overlay-br { bottom: 12px; right: 12px; border-width: 0 2px 2px 0; border-radius: 0 0 4px 0; }
+.webcam-overlay-bl { bottom: 12px; left: 12px; border-width: 0 0 2px 2px; border-radius: 0 0 0 4px; }
+
+.webcam-placeholder {
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+  color: var(--text3);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.webcam-placeholder .big-icon { font-size: 40px; opacity: 0.3; }
+
+.webcam-controls {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+.webcam-controls .btn { flex: 1; }
+
+/* ── Mode Toggle ─────────────────────────────────────── */
+.mode-toggle {
+  display: flex;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 3px;
+  margin-bottom: 20px;
+  gap: 2px;
+}
+.mode-btn {
+  flex: 1; padding: 8px;
+  text-align: center;
+  cursor: pointer;
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text3);
+  transition: var(--transition);
+  user-select: none;
+}
+.mode-btn.active { background: var(--bg3); color: var(--accent); }
+.mode-btn:hover:not(.active) { color: var(--text2); }
+
+/* ── Pipeline Trace ──────────────────────────────────── */
+.pipeline {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  margin: 24px 0;
+  overflow-x: auto;
+  padding: 4px 0;
+}
+.pipeline-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  min-width: 100px;
+  flex: 1;
+}
+.pipeline-node-box {
+  width: 72px; height: 72px;
+  border-radius: 14px;
+  border: 2px solid var(--border2);
+  background: var(--bg2);
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 4px;
+  position: relative;
+  transition: all 0.4s ease;
+  overflow: hidden;
+}
+.pipeline-node-box.done {
+  border-color: var(--green);
+  box-shadow: 0 0 16px rgba(0,255,136,0.2);
+}
+.pipeline-node-box.fail {
+  border-color: var(--red);
+  box-shadow: 0 0 16px rgba(255,61,90,0.2);
+}
+.pipeline-node-box.warn {
+  border-color: var(--amber);
+  box-shadow: 0 0 16px rgba(255,170,0,0.2);
+}
+.pipeline-node-box.processing {
+  border-color: var(--accent);
+  animation: nodeProcessing 1s ease-in-out infinite;
+}
+@keyframes nodeProcessing {
+  0%,100% { box-shadow: 0 0 8px rgba(0,212,255,0.2); }
+  50%      { box-shadow: 0 0 24px rgba(0,212,255,0.5); }
+}
+.pipeline-node-icon { font-size: 22px; }
+.pipeline-node-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text3);
+  text-align: center;
+}
+.pipeline-node-status {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text3);
+  text-align: center;
+}
+.pipeline-connector {
+  flex: 1;
+  height: 2px;
+  background: var(--border);
+  margin-bottom: 38px;
+  position: relative;
+  min-width: 20px;
+  transition: background 0.4s;
+}
+.pipeline-connector.active { background: var(--accent2); }
+
+/* ── Result Display ──────────────────────────────────── */
+.result-panel {
+  display: none;
+  animation: resultIn 0.5s cubic-bezier(0.34,1.56,0.64,1);
+}
+.result-panel.show { display: block; }
+@keyframes resultIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: none; } }
+
+.result-hero {
+  text-align: center;
+  padding: 40px 24px;
+  border-radius: var(--radius2);
+  border: 1px solid var(--border);
+  margin-bottom: 20px;
+  position: relative;
+  overflow: hidden;
+}
+.result-hero.approved { border-color: var(--green); background: rgba(0,255,136,0.04); }
+.result-hero.rejected { border-color: var(--red);   background: rgba(255,61,90,0.04); }
+.result-hero.escalate { border-color: var(--amber); background: rgba(255,170,0,0.04); }
+
+.result-glow {
+  position: absolute;
+  top: -60px; left: 50%; transform: translateX(-50%);
+  width: 200px; height: 200px;
+  border-radius: 50%;
+  filter: blur(40px);
+  opacity: 0.3;
+  pointer-events: none;
+}
+.approved .result-glow { background: var(--green); }
+.rejected .result-glow { background: var(--red); }
+.escalate .result-glow { background: var(--amber); }
+
+.result-icon-wrap {
+  width: 80px; height: 80px;
+  border-radius: 20px;
+  border: 2px solid;
+  display: flex; align-items: center; justify-content: center;
+  margin: 0 auto 16px;
+  font-size: 32px;
+  position: relative;
+}
+.approved .result-icon-wrap { border-color: var(--green); box-shadow: var(--glow-g); }
+.rejected .result-icon-wrap { border-color: var(--red);   box-shadow: var(--glow-r); }
+.escalate .result-icon-wrap { border-color: var(--amber); box-shadow: var(--glow-y); }
+
+.result-status-text {
+  font-family: var(--font-mono);
+  font-size: 20px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  margin-bottom: 8px;
+}
+.approved .result-status-text { color: var(--green); }
+.rejected .result-status-text { color: var(--red); }
+.escalate .result-status-text { color: var(--amber); }
+
+.result-message { color: var(--text2); font-size: 13px; max-width: 400px; margin: 0 auto; }
+
+/* Confidence bar */
+.confidence-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 24px;
+  padding: 14px 20px;
+  background: var(--bg2);
+  border-radius: var(--radius);
+}
+.confidence-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text3);
+  white-space: nowrap;
+  min-width: 80px;
+}
+.confidence-bar-wrap { flex: 1; height: 6px; background: var(--bg3); border-radius: 3px; overflow: hidden; }
+.confidence-bar {
+  height: 100%;
+  border-radius: 3px;
+  width: 0;
+  transition: width 1s cubic-bezier(0.4, 0, 0.2, 1) 0.3s;
+}
+.approved .confidence-bar { background: linear-gradient(90deg, var(--green2), var(--green)); }
+.rejected .confidence-bar { background: linear-gradient(90deg, var(--red2), var(--red)); }
+.escalate .confidence-bar { background: linear-gradient(90deg, var(--amber2), var(--amber)); }
+
+.confidence-value {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  min-width: 44px;
+  text-align: right;
+}
+.approved .confidence-value { color: var(--green); }
+.rejected .confidence-value { color: var(--red); }
+.escalate .confidence-value { color: var(--amber); }
+
+/* Meta grid */
+.meta-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.meta-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+}
+.meta-card-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text3);
+  margin-bottom: 6px;
+}
+.meta-card-value {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* Agent trace */
+.trace-list { display: flex; flex-direction: column; gap: 8px; }
+.trace-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 12px;
+}
+.trace-node {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  min-width: 76px;
+  padding-top: 2px;
+}
+.trace-status-dot {
+  width: 8px; height: 8px; border-radius: 50%; margin-top: 4px; flex-shrink: 0;
+}
+.trace-detail { color: var(--text2); flex: 1; }
+.trace-time { font-family: var(--font-mono); font-size: 9px; color: var(--text3); white-space: nowrap; }
+
+/* JWT token display */
+.token-box {
+  background: var(--bg2);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--green);
+  word-break: break-all;
+  margin-top: 12px;
+  cursor: pointer;
+  transition: var(--transition);
+  position: relative;
+}
+.token-box:hover { border-color: var(--green2); }
+.token-copy-hint {
+  font-size: 9px;
+  color: var(--text3);
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* ── Alert / Toast ───────────────────────────────────── */
+.toast {
+  position: fixed;
+  bottom: 24px; right: 24px;
+  background: var(--panel);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius2);
+  padding: 14px 20px;
+  font-size: 13px;
+  color: var(--text);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  z-index: 999;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 360px;
+  transform: translateY(20px);
+  opacity: 0;
+  transition: all 0.3s cubic-bezier(0.34,1.56,0.64,1);
+  pointer-events: none;
+}
+.toast.show { transform: none; opacity: 1; pointer-events: auto; }
+.toast.success { border-color: var(--green2); }
+.toast.error   { border-color: var(--red2); }
+.toast.info    { border-color: var(--accent2); }
+
+/* ── Loading spinner ─────────────────────────────────── */
+.spinner {
+  width: 18px; height: 18px;
+  border: 2px solid rgba(0,212,255,0.2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Enrolled list ───────────────────────────────────── */
+.student-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg3);
+  border: 1px solid var(--border2);
+  border-radius: 20px;
+  padding: 4px 12px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text2);
+}
+.student-chip::before { content: '◆'; font-size: 6px; color: var(--green); }
+
+/* ── Utility ─────────────────────────────────────────── */
+.mt-4  { margin-top: 4px; }
+.mt-8  { margin-top: 8px; }
+.mt-12 { margin-top: 12px; }
+.mt-16 { margin-top: 16px; }
+.mt-20 { margin-top: 20px; }
+.mt-24 { margin-top: 24px; }
+.gap-12 { gap: 12px; }
+.flex { display: flex; }
+.items-center { align-items: center; }
+.justify-between { justify-content: space-between; }
+.flex-wrap { flex-wrap: wrap; }
+.hidden { display: none !important; }
+hr.divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
+.text-mono { font-family: var(--font-mono); }
+.text-xs { font-size: 11px; }
+.text-accent { color: var(--accent); }
+.text-green { color: var(--green); }
+.text-red   { color: var(--red); }
+.text-amber { color: var(--amber); }
+.text-muted { color: var(--text2); }
+
+/* ── Scrollbar ───────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg2); }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text3); }
+</style>
+</head>
+<body>
+<div id="app">
+
+<!-- TOP BAR -->
+<header class="topbar">
+  <div class="logo">
+    <div class="logo-icon">⬡</div>
+    PROCTOR<span style="color:var(--text2)">AI</span>
+  </div>
+  <nav class="nav-tabs">
+    <button class="nav-tab active" data-page="enroll">01 Enroll</button>
+    <button class="nav-tab" data-page="verify">02 Verify</button>
+    <button class="nav-tab" data-page="result">03 Result</button>
+  </nav>
+  <div class="status-badge">
+    <div class="logo-dot"></div>
+    System Online
+  </div>
+</header>
+
+<!-- MAIN -->
+<main class="main">
+
+  <!-- ════════════════════════════════════════
+       PAGE 1 — ENROLLMENT
+  ════════════════════════════════════════ -->
+  <div class="page active" id="page-enroll">
+    <div class="section-header">
+      <div>
+        <div class="section-title">Step 01 — Identity Registration</div>
+        <h1 class="section-heading">Student Enrollment</h1>
+      </div>
+      <p class="section-desc">Register a student's biometric identity before their exam session.</p>
+    </div>
+
+    <div class="grid-2">
+      <!-- Form -->
+      <div class="card">
+        <div class="card-label">Student Information</div>
+        <div class="form-group">
+          <label for="enroll-id">Student ID *</label>
+          <input type="text" id="enroll-id" placeholder="e.g. STU-2024-001" autocomplete="off" />
+        </div>
+        <div class="form-group">
+          <label for="enroll-name">Full Name *</label>
+          <input type="text" id="enroll-name" placeholder="e.g. Jane Doe" autocomplete="off" />
+        </div>
+        <hr class="divider" />
+        <div class="card-label">Biometric Photo</div>
+        <div class="form-group">
+          <label>Face Photo * (clear, frontal, well-lit)</label>
+          <div class="upload-area" id="enroll-photo-area">
+            <input type="file" id="enroll-photo" accept="image/jpeg,image/png,image/webp" />
+            <img class="upload-preview" id="enroll-photo-preview" src="" alt="Preview" />
+            <div class="upload-icon" id="enroll-photo-icon">📷</div>
+            <div class="upload-text" id="enroll-photo-text">Click or drag to upload face photo</div>
+            <div class="upload-hint">JPEG / PNG / WEBP · Max 10MB</div>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>ID Document (optional)</label>
+          <div class="upload-area" id="enroll-id-area">
+            <input type="file" id="enroll-id-doc" accept="image/jpeg,image/png,image/webp" />
+            <img class="upload-preview" id="enroll-id-preview" src="" alt="Preview" />
+            <div class="upload-icon" id="enroll-id-icon">🪪</div>
+            <div class="upload-text" id="enroll-id-text">Upload ID card / passport (optional)</div>
+            <div class="upload-hint">Used for audit trail only</div>
+          </div>
+        </div>
+        <button class="btn btn-primary btn-full" id="enroll-submit-btn" onclick="submitEnrollment()">
+          <span id="enroll-btn-text">Enroll Student</span>
+          <div class="spinner hidden" id="enroll-spinner"></div>
+        </button>
+      </div>
+
+      <!-- Info + enrolled list -->
+      <div style="display:flex; flex-direction:column; gap:16px;">
+        <div class="card">
+          <div class="card-label">Requirements</div>
+          <ul style="list-style:none; display:flex; flex-direction:column; gap:10px;">
+            <li class="flex items-center gap-12" style="gap:10px; font-size:12px; color:var(--text2);">
+              <span style="color:var(--green);">✓</span> Single face, clearly visible
+            </li>
+            <li class="flex items-center gap-12" style="gap:10px; font-size:12px; color:var(--text2);">
+              <span style="color:var(--green);">✓</span> Neutral expression, eyes open
+            </li>
+            <li class="flex items-center gap-12" style="gap:10px; font-size:12px; color:var(--text2);">
+              <span style="color:var(--green);">✓</span> Good, even lighting
+            </li>
+            <li class="flex items-center gap-12" style="gap:10px; font-size:12px; color:var(--text2);">
+              <span style="color:var(--red);">✗</span> No sunglasses or face coverings
+            </li>
+            <li class="flex items-center gap-12" style="gap:10px; font-size:12px; color:var(--text2);">
+              <span style="color:var(--red);">✗</span> No heavily filtered images
+            </li>
+          </ul>
+        </div>
+        <div class="card" id="enrolled-students-card">
+          <div class="card-label">Currently Enrolled</div>
+          <div id="enrolled-list" style="display:flex; flex-wrap:wrap; gap:8px; min-height:40px;">
+            <span style="color:var(--text3); font-size:12px;">Loading…</span>
+          </div>
+          <div class="mt-12" style="font-family:var(--font-mono); font-size:10px; color:var(--text3);">
+            <span id="enrolled-count">—</span> students registered
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-label">ArcFace Model Info</div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+            <div>
+              <div style="font-family:var(--font-mono); font-size:9px; color:var(--text3); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:4px;">Model</div>
+              <div style="font-family:var(--font-mono); font-size:11px; color:var(--accent);">ArcFace</div>
+            </div>
+            <div>
+              <div style="font-family:var(--font-mono); font-size:9px; color:var(--text3); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:4px;">Metric</div>
+              <div style="font-family:var(--font-mono); font-size:11px; color:var(--accent);">Cosine</div>
+            </div>
+            <div>
+              <div style="font-family:var(--font-mono); font-size:9px; color:var(--text3); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:4px;">Pipeline</div>
+              <div style="font-family:var(--font-mono); font-size:11px; color:var(--accent);">LangGraph</div>
+            </div>
+            <div>
+              <div style="font-family:var(--font-mono); font-size:9px; color:var(--text3); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:4px;">Anti-Spoof</div>
+              <div style="font-family:var(--font-mono); font-size:11px; color:var(--accent);">DeepFace</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════
+       PAGE 2 — VERIFY
+  ════════════════════════════════════════ -->
+  <div class="page" id="page-verify">
+    <div class="section-header">
+      <div>
+        <div class="section-title">Step 02 — Live Identity Check</div>
+        <h1 class="section-heading">Verification</h1>
+      </div>
+      <p class="section-desc">Capture or upload a photo to verify against the enrolled identity.</p>
+    </div>
+
+    <div class="grid-2">
+      <!-- Left — camera / upload -->
+      <div class="card">
+        <div class="card-label">Student ID</div>
+        <div class="form-group">
+          <label for="verify-id">Enter Student ID to Verify</label>
+          <input type="text" id="verify-id" placeholder="e.g. STU-2024-001" autocomplete="off" />
+        </div>
+
+        <div class="card-label" style="margin-top:16px;">Capture Method</div>
+        <div class="mode-toggle">
+          <div class="mode-btn active" data-mode="webcam" onclick="setVerifyMode('webcam')">🎥 Webcam</div>
+          <div class="mode-btn" data-mode="upload" onclick="setVerifyMode('upload')">📁 Upload</div>
+        </div>
+
+        <!-- Webcam mode -->
+        <div id="webcam-mode">
+          <div class="webcam-container" id="webcam-container">
+            <video id="webcam-video" autoplay playsinline muted></video>
+            <canvas id="webcam-canvas" style="display:none;"></canvas>
+            <div class="webcam-overlay">
+              <div class="webcam-overlay-br"></div>
+              <div class="webcam-overlay-bl"></div>
+            </div>
+            <div class="webcam-placeholder" id="webcam-placeholder">
+              <div class="big-icon">📷</div>
+              <span>Camera not started</span>
+            </div>
+          </div>
+          <div class="webcam-controls">
+            <button class="btn btn-ghost" id="start-camera-btn" onclick="startCamera()">Start Camera</button>
+            <button class="btn btn-primary hidden" id="capture-btn" onclick="captureFrame()">Capture Frame</button>
+            <button class="btn btn-ghost hidden" id="retake-btn" onclick="retakePhoto()">Retake</button>
+          </div>
+        </div>
+
+        <!-- Upload mode -->
+        <div id="upload-mode" style="display:none;">
+          <div class="upload-area" id="verify-photo-area">
+            <input type="file" id="verify-photo" accept="image/jpeg,image/png,image/webp" />
+            <img class="upload-preview" id="verify-photo-preview" src="" alt="Preview" />
+            <div class="upload-icon" id="verify-upload-icon">📂</div>
+            <div class="upload-text" id="verify-upload-text">Click or drag to upload probe image</div>
+            <div class="upload-hint">JPEG / PNG / WEBP · Max 10MB</div>
+          </div>
+        </div>
+
+        <button class="btn btn-primary btn-full mt-16" id="verify-submit-btn" onclick="submitVerification()">
+          <span id="verify-btn-text">Run Verification</span>
+          <div class="spinner hidden" id="verify-spinner"></div>
+        </button>
+      </div>
+
+      <!-- Right — pipeline status + instructions -->
+      <div style="display:flex; flex-direction:column; gap:16px;">
+        <div class="card">
+          <div class="card-label">Verification Pipeline — 4 Nodes</div>
+          <div class="pipeline" id="pipeline-display">
+            <div class="pipeline-node">
+              <div class="pipeline-node-box" id="pnode-capture">
+                <span class="pipeline-node-icon">🔍</span>
+              </div>
+              <div class="pipeline-node-label">Capture</div>
+              <div class="pipeline-node-status" id="pstatus-capture">Idle</div>
+            </div>
+            <div class="pipeline-connector" id="pconn-1"></div>
+            <div class="pipeline-node">
+              <div class="pipeline-node-box" id="pnode-liveness">
+                <span class="pipeline-node-icon">👁</span>
+              </div>
+              <div class="pipeline-node-label">Liveness</div>
+              <div class="pipeline-node-status" id="pstatus-liveness">Idle</div>
+            </div>
+            <div class="pipeline-connector" id="pconn-2"></div>
+            <div class="pipeline-node">
+              <div class="pipeline-node-box" id="pnode-recognition">
+                <span class="pipeline-node-icon">🧬</span>
+              </div>
+              <div class="pipeline-node-label">ArcFace</div>
+              <div class="pipeline-node-status" id="pstatus-recognition">Idle</div>
+            </div>
+            <div class="pipeline-connector" id="pconn-3"></div>
+            <div class="pipeline-node">
+              <div class="pipeline-node-box" id="pnode-decision">
+                <span class="pipeline-node-icon">⚖</span>
+              </div>
+              <div class="pipeline-node-label">Decision</div>
+              <div class="pipeline-node-status" id="pstatus-decision">Idle</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-label">Instructions</div>
+          <ol style="padding-left:16px; display:flex; flex-direction:column; gap:10px; color:var(--text2); font-size:12px; line-height:1.5;">
+            <li>Enter the student's ID in the field above</li>
+            <li>Start webcam or upload a probe photo</li>
+            <li>Ensure good lighting and face is centered</li>
+            <li>Click <strong style="color:var(--text);">Run Verification</strong></li>
+            <li>The LangGraph pipeline will analyze the image</li>
+            <li>View results on the <strong style="color:var(--text);">Result</strong> tab</li>
+          </ol>
+        </div>
+
+        <div class="card" id="api-status-card">
+          <div class="card-label">API Status</div>
+          <div class="flex items-center" style="gap:10px; font-size:12px;">
+            <div id="api-indicator" style="width:8px;height:8px;border-radius:50%;background:var(--text3);"></div>
+            <span id="api-status-text" style="color:var(--text3); font-family:var(--font-mono); font-size:11px;">Checking…</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════
+       PAGE 3 — RESULT
+  ════════════════════════════════════════ -->
+  <div class="page" id="page-result">
+    <div class="section-header">
+      <div>
+        <div class="section-title">Step 03 — Verification Outcome</div>
+        <h1 class="section-heading">Result</h1>
+      </div>
+      <button class="btn btn-ghost" onclick="resetToVerify()">← New Verification</button>
+    </div>
+
+    <div id="result-waiting" class="card" style="text-align:center; padding:60px 24px;">
+      <div style="font-size:48px; opacity:0.2; margin-bottom:16px;">⏳</div>
+      <div style="font-family:var(--font-mono); font-size:11px; text-transform:uppercase; letter-spacing:0.08em; color:var(--text3);">
+        No verification run yet — go to the Verify tab
+      </div>
+    </div>
+
+    <div class="result-panel" id="result-panel">
+      <!-- Hero card -->
+      <div class="result-hero" id="result-hero">
+        <div class="result-glow"></div>
+        <div class="result-icon-wrap" id="result-icon-wrap">
+          <span id="result-emoji">—</span>
+        </div>
+        <div class="result-status-text" id="result-status-text">—</div>
+        <p class="result-message" id="result-message">—</p>
+        <!-- Confidence bar -->
+        <div class="confidence-row">
+          <div class="confidence-label">Confidence</div>
+          <div class="confidence-bar-wrap"><div class="confidence-bar" id="result-conf-bar"></div></div>
+          <div class="confidence-value" id="result-conf-val">—</div>
+        </div>
+      </div>
+
+      <!-- Metrics grid -->
+      <div class="meta-grid" id="meta-grid">
+        <div class="meta-card">
+          <div class="meta-card-label">Student ID</div>
+          <div class="meta-card-value" id="meta-student-id">—</div>
+        </div>
+        <div class="meta-card">
+          <div class="meta-card-label">Liveness</div>
+          <div class="meta-card-value" id="meta-liveness">—</div>
+        </div>
+        <div class="meta-card">
+          <div class="meta-card-label">Distance</div>
+          <div class="meta-card-value" id="meta-distance">—</div>
+        </div>
+      </div>
+
+      <!-- Token (only on approved) -->
+      <div id="token-section" class="card hidden">
+        <div class="card-label">JWT Access Token — Valid <span id="token-expiry">30 min</span></div>
+        <div class="token-box" id="token-box" onclick="copyToken()">Loading…</div>
+        <div class="token-copy-hint">Click to copy</div>
+        <div class="mt-12">
+          <button class="btn btn-ghost" onclick="validateToken()">
+            <span id="validate-btn-text">Validate Token</span>
+            <div class="spinner hidden" id="validate-spinner"></div>
+          </button>
+          <span id="validate-result" style="font-family:var(--font-mono); font-size:11px; color:var(--text3); margin-left:12px;"></span>
+        </div>
+      </div>
+
+      <!-- Agent trace -->
+      <div class="card mt-20" id="trace-section">
+        <div class="card-label">LangGraph Agent Trace</div>
+        <div class="trace-list" id="trace-list">
+          <span style="color:var(--text3); font-size:12px;">No trace available.</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</main>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast">
+  <span id="toast-icon">ℹ</span>
+  <span id="toast-msg">Message</span>
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════
+   CONFIG
+═══════════════════════════════════════════════ */
+const API = '/api/v1';
+
+/* ═══════════════════════════════════════════════
+   STATE
+═══════════════════════════════════════════════ */
+let verifyMode = 'webcam';
+let webcamStream = null;
+let capturedBlob = null;
+let currentToken = null;
+let currentStudentId = null;
+
+/* ═══════════════════════════════════════════════
+   NAVIGATION
+═══════════════════════════════════════════════ */
+document.querySelectorAll('.nav-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('page-' + tab.dataset.page).classList.add('active');
+    if (tab.dataset.page === 'enroll') loadEnrolledStudents();
+  });
+});
+
+function goToPage(name) {
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelector(`.nav-tab[data-page="${name}"]`).classList.add('active');
+  document.getElementById('page-' + name).classList.add('active');
+}
+
+/* ═══════════════════════════════════════════════
+   TOAST
+═══════════════════════════════════════════════ */
+let toastTimeout;
+function showToast(msg, type = 'info') {
+  const el = document.getElementById('toast');
+  const icons = { success: '✓', error: '✕', info: 'ℹ' };
+  document.getElementById('toast-icon').textContent = icons[type] || 'ℹ';
+  document.getElementById('toast-msg').textContent = msg;
+  el.className = `toast show ${type}`;
+  clearTimeout(toastTimeout);
+  toastTimeout = setTimeout(() => { el.classList.remove('show'); }, 3800);
+}
+
+/* ═══════════════════════════════════════════════
+   FILE UPLOAD PREVIEWS
+═══════════════════════════════════════════════ */
+function setupUploadArea(inputId, previewId, areaId, iconId, textId) {
+  const input = document.getElementById(inputId);
+  const preview = document.getElementById(previewId);
+  const area = document.getElementById(areaId);
+  const icon = document.getElementById(iconId);
+  const text = document.getElementById(textId);
+
+  input.addEventListener('change', e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      preview.src = ev.target.result;
+      preview.classList.add('show');
+      icon.style.display = 'none';
+      text.textContent = file.name;
+      area.classList.add('has-file');
+    };
+    reader.readAsDataURL(file);
+  });
+
+  area.addEventListener('dragover', e => { e.preventDefault(); area.classList.add('drag-over'); });
+  area.addEventListener('dragleave', () => area.classList.remove('drag-over'));
+  area.addEventListener('drop', e => {
+    e.preventDefault(); area.classList.remove('drag-over');
+    const file = e.dataTransfer.files[0];
+    if (file && file.type.startsWith('image/')) {
+      const dt = new DataTransfer(); dt.items.add(file); input.files = dt.files;
+      input.dispatchEvent(new Event('change'));
+    }
+  });
+}
+
+setupUploadArea('enroll-photo', 'enroll-photo-preview', 'enroll-photo-area', 'enroll-photo-icon', 'enroll-photo-text');
+setupUploadArea('enroll-id-doc', 'enroll-id-preview', 'enroll-id-area', 'enroll-id-icon', 'enroll-id-text');
+setupUploadArea('verify-photo', 'verify-photo-preview', 'verify-photo-area', 'verify-upload-icon', 'verify-upload-text');
+
+/* ═══════════════════════════════════════════════
+   WEBCAM
+═══════════════════════════════════════════════ */
+async function startCamera() {
+  try {
+    webcamStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 640, height: 480 } });
+    const video = document.getElementById('webcam-video');
+    video.srcObject = webcamStream;
+    video.style.display = 'block';
+    document.getElementById('webcam-placeholder').style.display = 'none';
+    document.getElementById('start-camera-btn').classList.add('hidden');
+    document.getElementById('capture-btn').classList.remove('hidden');
+    capturedBlob = null;
+    showToast('Camera started — position your face in the frame', 'info');
+  } catch (err) {
+    showToast('Camera access denied: ' + err.message, 'error');
+  }
+}
+
+function captureFrame() {
+  const video = document.getElementById('webcam-video');
+  const canvas = document.getElementById('webcam-canvas');
+  canvas.width  = video.videoWidth  || 640;
+  canvas.height = video.videoHeight || 480;
+  canvas.getContext('2d').drawImage(video, 0, 0);
+  canvas.toBlob(blob => {
+    capturedBlob = blob;
+    canvas.style.display = 'block';
+    video.style.display  = 'none';
+    document.getElementById('capture-btn').classList.add('hidden');
+    document.getElementById('retake-btn').classList.remove('hidden');
+    showToast('Frame captured — ready to verify', 'success');
+  }, 'image/jpeg', 0.92);
+}
+
+function retakePhoto() {
+  const video   = document.getElementById('webcam-video');
+  const canvas  = document.getElementById('webcam-canvas');
+  canvas.style.display = 'none';
+  video.style.display  = 'block';
+  capturedBlob = null;
+  document.getElementById('capture-btn').classList.remove('hidden');
+  document.getElementById('retake-btn').classList.add('hidden');
+}
+
+function stopCamera() {
+  if (webcamStream) {
+    webcamStream.getTracks().forEach(t => t.stop());
+    webcamStream = null;
+  }
+}
+
+/* ═══════════════════════════════════════════════
+   VERIFY MODE TOGGLE
+═══════════════════════════════════════════════ */
+function setVerifyMode(mode) {
+  verifyMode = mode;
+  document.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+  document.getElementById('webcam-mode').style.display = mode === 'webcam' ? 'block' : 'none';
+  document.getElementById('upload-mode').style.display = mode === 'upload' ? 'block' : 'none';
+  if (mode !== 'webcam') stopCamera();
+}
+
+/* ═══════════════════════════════════════════════
+   API HEALTH CHECK
+═══════════════════════════════════════════════ */
+async function checkApiHealth() {
+  try {
+    const r = await fetch(API + '/health');
+    const ok = r.ok;
+    document.getElementById('api-indicator').style.background = ok ? 'var(--green)' : 'var(--red)';
+    document.getElementById('api-indicator').style.boxShadow  = ok ? 'var(--glow-g)' : 'var(--glow-r)';
+    document.getElementById('api-status-text').textContent = ok ? 'API Online — Ready' : 'API Unreachable';
+    document.getElementById('api-status-text').style.color = ok ? 'var(--green)' : 'var(--red)';
+  } catch {
+    document.getElementById('api-indicator').style.background = 'var(--red)';
+    document.getElementById('api-status-text').textContent = 'API Unreachable';
+    document.getElementById('api-status-text').style.color = 'var(--red)';
+  }
+}
+checkApiHealth();
+setInterval(checkApiHealth, 15000);
+
+/* ═══════════════════════════════════════════════
+   ENROLLED STUDENTS LIST
+═══════════════════════════════════════════════ */
+async function loadEnrolledStudents() {
+  try {
+    const r = await fetch(API + '/students');
+    const data = await r.json();
+    const list = document.getElementById('enrolled-list');
+    const count = document.getElementById('enrolled-count');
+    count.textContent = data.count;
+    if (data.enrolled_students.length === 0) {
+      list.innerHTML = '<span style="color:var(--text3); font-size:12px;">No students enrolled yet</span>';
+    } else {
+      list.innerHTML = data.enrolled_students
+        .map(id => `<span class="student-chip">${id}</span>`)
+        .join('');
+    }
+  } catch {
+    document.getElementById('enrolled-list').innerHTML =
+      '<span style="color:var(--text3); font-size:12px;">Could not load enrolled students</span>';
+  }
+}
+loadEnrolledStudents();
+
+/* ═══════════════════════════════════════════════
+   ENROLLMENT SUBMISSION
+═══════════════════════════════════════════════ */
+async function submitEnrollment() {
+  const studentId   = document.getElementById('enroll-id').value.trim();
+  const studentName = document.getElementById('enroll-name').value.trim();
+  const photoFile   = document.getElementById('enroll-photo').files[0];
+  const idFile      = document.getElementById('enroll-id-doc').files[0];
+
+  if (!studentId) { showToast('Please enter a student ID', 'error'); return; }
+  if (!studentName) { showToast('Please enter the student name', 'error'); return; }
+  if (!photoFile) { showToast('Please upload a face photo', 'error'); return; }
+
+  const btn = document.getElementById('enroll-submit-btn');
+  const btnText = document.getElementById('enroll-btn-text');
+  const spinner = document.getElementById('enroll-spinner');
+  btn.disabled = true;
+  btnText.textContent = 'Enrolling…';
+  spinner.classList.remove('hidden');
+
+  try {
+    const form = new FormData();
+    form.append('student_id',   studentId);
+    form.append('student_name', studentName);
+    form.append('photo',        photoFile, photoFile.name);
+    if (idFile) form.append('id_document', idFile, idFile.name);
+
+    const r = await fetch(API + '/enroll', { method: 'POST', body: form });
+    const data = await r.json();
+
+    if (r.ok && data.success) {
+      showToast(`✓ ${studentName} enrolled successfully!`, 'success');
+      loadEnrolledStudents();
+      // Auto-fill verify ID
+      document.getElementById('verify-id').value = studentId;
+    } else {
+      showToast(data.message || data.detail || 'Enrollment failed', 'error');
+    }
+  } catch (err) {
+    showToast('Network error: ' + err.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btnText.textContent = 'Enroll Student';
+    spinner.classList.add('hidden');
+  }
+}
+
+/* ═══════════════════════════════════════════════
+   PIPELINE ANIMATION
+═══════════════════════════════════════════════ */
+const NODE_NAMES = ['capture', 'liveness', 'recognition', 'decision'];
+
+function resetPipeline() {
+  NODE_NAMES.forEach(n => {
+    const box = document.getElementById('pnode-' + n);
+    box.className = 'pipeline-node-box';
+    document.getElementById('pstatus-' + n).textContent = 'Idle';
+  });
+  [1,2,3].forEach(i => document.getElementById('pconn-' + i).classList.remove('active'));
+}
+
+function animatePipelineFromTrace(trace) {
+  resetPipeline();
+  const nodeMap = { capture: 0, liveness: 1, recognition: 2, decision: 3 };
+  let delay = 0;
+  trace.forEach(entry => {
+    const idx = nodeMap[entry.node];
+    if (idx === undefined) return;
+    setTimeout(() => {
+      // Activate connector before this node
+      if (idx > 0) document.getElementById('pconn-' + idx).classList.add('active');
+      const box = document.getElementById('pnode-' + entry.node);
+      const statusEl = document.getElementById('pstatus-' + entry.node);
+      const s = entry.status || 'ok';
+      box.className = 'pipeline-node-box ' + (
+        s === 'ok' || s === 'approved' ? 'done' :
+        s === 'fail' || s === 'error' || s === 'rejected' ? 'fail' :
+        s === 'escalate' || s === 'warn' ? 'warn' : 'done'
+      );
+      statusEl.textContent = s.toUpperCase();
+    }, delay);
+    delay += 350;
+  });
+}
+
+/* ═══════════════════════════════════════════════
+   VERIFICATION SUBMISSION
+═══════════════════════════════════════════════ */
+async function submitVerification() {
+  const studentId = document.getElementById('verify-id').value.trim();
+  if (!studentId) { showToast('Please enter a student ID', 'error'); return; }
+
+  let photoBlob;
+  let photoName;
+  if (verifyMode === 'webcam') {
+    if (!capturedBlob) { showToast('Please capture a frame first', 'error'); return; }
+    photoBlob = capturedBlob;
+    photoName = 'webcam_capture.jpg';
+  } else {
+    const file = document.getElementById('verify-photo').files[0];
+    if (!file) { showToast('Please upload a photo', 'error'); return; }
+    photoBlob = file;
+    photoName = file.name;
+  }
+
+  const btn = document.getElementById('verify-submit-btn');
+  const btnText = document.getElementById('verify-btn-text');
+  const spinner = document.getElementById('verify-spinner');
+  btn.disabled = true;
+  btnText.textContent = 'Analyzing…';
+  spinner.classList.remove('hidden');
+
+  // Animate pipeline as "processing"
+  resetPipeline();
+  document.getElementById('pnode-capture').classList.add('processing');
+
+  try {
+    const form = new FormData();
+    form.append('student_id', studentId);
+    form.append('photo', photoBlob, photoName);
+
+    const r = await fetch(API + '/verify', { method: 'POST', body: form });
+    const data = await r.json();
+
+    if (!r.ok) {
+      showToast(data.detail || 'Verification request failed', 'error');
+      resetPipeline();
+      return;
+    }
+
+    // Animate pipeline with actual trace
+    if (data.agent_trace && data.agent_trace.length) {
+      animatePipelineFromTrace(data.agent_trace);
+    }
+
+    // Store for result page
+    currentToken = data.token;
+    currentStudentId = studentId;
+
+    // Show result after brief delay
+    setTimeout(() => {
+      displayResult(data);
+      goToPage('result');
+      showToast('Verification complete — see result tab', data.status === 'approved' ? 'success' : 'info');
+    }, NODE_NAMES.length * 350 + 200);
+
+  } catch (err) {
+    showToast('Network error: ' + err.message, 'error');
+    resetPipeline();
+  } finally {
+    btn.disabled = false;
+    btnText.textContent = 'Run Verification';
+    spinner.classList.add('hidden');
+  }
+}
+
+/* ═══════════════════════════════════════════════
+   RESULT DISPLAY
+═══════════════════════════════════════════════ */
+function displayResult(data) {
+  document.getElementById('result-waiting').style.display = 'none';
+  const panel = document.getElementById('result-panel');
+  panel.classList.add('show');
+
+  const hero  = document.getElementById('result-hero');
+  const iconW = document.getElementById('result-icon-wrap');
+
+  const statusInfo = {
+    approved: { emoji: '✓', label: 'Approved', cls: 'approved' },
+    rejected: { emoji: '✕', label: 'Rejected', cls: 'rejected' },
+    escalate: { emoji: '⚑', label: 'Escalated', cls: 'escalate' },
+  };
+  const info = statusInfo[data.status] || statusInfo.rejected;
+
+  hero.className = 'result-hero ' + info.cls;
+  iconW.className = 'result-icon-wrap';
+  document.getElementById('result-emoji').textContent = info.emoji;
+  document.getElementById('result-status-text').textContent = info.label;
+  document.getElementById('result-message').textContent = data.message || '';
+
+  // Confidence bar
+  const confPct = Math.round((data.confidence || 0) * 100);
+  document.getElementById('result-conf-val').textContent = confPct + '%';
+  setTimeout(() => {
+    document.getElementById('result-conf-bar').style.width = confPct + '%';
+  }, 100);
+
+  // Meta
+  document.getElementById('meta-student-id').textContent = data.student_id || '—';
+  const livenessColors = { real: 'var(--green)', spoof: 'var(--red)', unknown: 'var(--amber)' };
+  const lv = (data.liveness || 'unknown').toLowerCase();
+  document.getElementById('meta-liveness').innerHTML =
+    `<span style="color:${livenessColors[lv] || 'var(--text)'};">${lv.toUpperCase()}</span>`;
+  document.getElementById('meta-distance').textContent =
+    data.distance !== undefined ? data.distance.toFixed(4) : '—';
+
+  // Token section
+  const tokenSec = document.getElementById('token-section');
+  if (data.status === 'approved' && data.token) {
+    tokenSec.classList.remove('hidden');
+    document.getElementById('token-box').textContent = data.token;
+  } else {
+    tokenSec.classList.add('hidden');
+  }
+
+  // Trace
+  const traceList = document.getElementById('trace-list');
+  if (data.agent_trace && data.agent_trace.length) {
+    const dotColor = s => s === 'ok' || s === 'done' || s === 'approved' ? 'var(--green)' :
+                          s === 'error' || s === 'fail' || s === 'rejected' ? 'var(--red)' :
+                          s === 'escalate' || s === 'warn' ? 'var(--amber)' : 'var(--text3)';
+    traceList.innerHTML = data.agent_trace.map(t => `
+      <div class="trace-item">
+        <div class="trace-status-dot" style="background:${dotColor(t.status)};box-shadow:0 0 6px ${dotColor(t.status)};"></div>
+        <div class="trace-node">${t.node || '—'}</div>
+        <div class="trace-detail">${t.detail || ''}</div>
+        <div class="trace-time">${t.duration_ms != null ? t.duration_ms + 'ms' : ''}</div>
+      </div>`).join('');
+  } else {
+    traceList.innerHTML = '<span style="color:var(--text3); font-size:12px;">No trace data available.</span>';
+  }
+}
+
+/* ═══════════════════════════════════════════════
+   TOKEN HELPERS
+═══════════════════════════════════════════════ */
+function copyToken() {
+  const token = document.getElementById('token-box').textContent;
+  navigator.clipboard.writeText(token).then(() => showToast('Token copied to clipboard', 'success'));
+}
+
+async function validateToken() {
+  const token = document.getElementById('token-box').textContent;
+  if (!token || token === 'Loading…') { showToast('No token to validate', 'error'); return; }
+
+  const btn = document.getElementById('validate-btn-text');
+  const sp  = document.getElementById('validate-spinner');
+  btn.textContent = 'Validating…';
+  sp.classList.remove('hidden');
+
+  try {
+    const r = await fetch(API + '/auth/validate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    });
+    const data = await r.json();
+    const res = document.getElementById('validate-result');
+    if (data.valid) {
+      res.textContent = `✓ Valid · Expires ${data.expires_at ? new Date(data.expires_at).toLocaleTimeString() : '?'}`;
+      res.style.color = 'var(--green)';
+    } else {
+      res.textContent = '✕ ' + (data.message || 'Invalid');
+      res.style.color = 'var(--red)';
+    }
+  } catch (err) {
+    showToast('Validate error: ' + err.message, 'error');
+  } finally {
+    btn.textContent = 'Validate Token';
+    sp.classList.add('hidden');
+  }
+}
+
+/* ═══════════════════════════════════════════════
+   RESET
+═══════════════════════════════════════════════ */
+function resetToVerify() {
+  document.getElementById('result-waiting').style.display = 'block';
+  document.getElementById('result-panel').classList.remove('show');
+  document.getElementById('result-conf-bar').style.width = '0';
+  currentToken = null;
+  capturedBlob = null;
+  retakePhoto();
+  resetPipeline();
+  goToPage('verify');
+}
+
+/* ═══════════════════════════════════════════════
+   KEYBOARD SHORTCUTS
+═══════════════════════════════════════════════ */
+document.addEventListener('keydown', e => {
+  if (e.key === '1') goToPage('enroll');
+  if (e.key === '2') goToPage('verify');
+  if (e.key === '3') goToPage('result');
+});
+</script>
+</body>
+</html>
