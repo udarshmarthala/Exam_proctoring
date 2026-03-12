@@ -836,12 +836,22 @@ hr.divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; 
         <div class="card-label">Biometric Photo</div>
         <div class="form-group">
           <label>Face Photo * (clear, frontal, well-lit)</label>
-          <div class="upload-area" id="enroll-photo-area">
-            <input type="file" id="enroll-photo" accept="image/jpeg,image/png,image/webp" />
-            <img class="upload-preview" id="enroll-photo-preview" src="" alt="Preview" />
-            <div class="upload-icon" id="enroll-photo-icon">📷</div>
-            <div class="upload-text" id="enroll-photo-text">Click or drag to upload face photo</div>
-            <div class="upload-hint">JPEG / PNG / WEBP · Max 10MB</div>
+          <div class="webcam-container" id="enroll-webcam-container">
+            <video id="enroll-webcam-video" autoplay playsinline muted></video>
+            <canvas id="enroll-webcam-canvas" style="display:none;"></canvas>
+            <div class="webcam-overlay">
+              <div class="webcam-overlay-br"></div>
+              <div class="webcam-overlay-bl"></div>
+            </div>
+            <div class="webcam-placeholder" id="enroll-webcam-placeholder">
+              <div class="big-icon">📷</div>
+              <span>Camera not started</span>
+            </div>
+          </div>
+          <div class="webcam-controls">
+            <button type="button" class="btn btn-ghost" id="enroll-start-camera-btn" onclick="startEnrollCamera()">Start Camera</button>
+            <button type="button" class="btn btn-primary hidden" id="enroll-capture-btn" onclick="captureEnrollFrame()">Capture Photo</button>
+            <button type="button" class="btn btn-ghost hidden" id="enroll-retake-btn" onclick="retakeEnrollPhoto()">Retake</button>
           </div>
         </div>
         <div class="form-group">
@@ -1140,6 +1150,8 @@ const API = '/api/v1';
 let verifyMode = 'webcam';
 let webcamStream = null;
 let capturedBlob = null;
+let enrollCamStream = null;
+let enrollCapturedBlob = null;
 let currentToken = null;
 let currentStudentId = null;
 
@@ -1213,9 +1225,60 @@ function setupUploadArea(inputId, previewId, areaId, iconId, textId) {
   });
 }
 
-setupUploadArea('enroll-photo', 'enroll-photo-preview', 'enroll-photo-area', 'enroll-photo-icon', 'enroll-photo-text');
 setupUploadArea('enroll-id-doc', 'enroll-id-preview', 'enroll-id-area', 'enroll-id-icon', 'enroll-id-text');
 setupUploadArea('verify-photo', 'verify-photo-preview', 'verify-photo-area', 'verify-upload-icon', 'verify-upload-text');
+
+/* ═══════════════════════════════════════════════
+   ENROLL WEBCAM
+═══════════════════════════════════════════════ */
+async function startEnrollCamera() {
+  try {
+    enrollCamStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 640, height: 480 } });
+    const video = document.getElementById('enroll-webcam-video');
+    video.srcObject = enrollCamStream;
+    video.style.display = 'block';
+    document.getElementById('enroll-webcam-placeholder').style.display = 'none';
+    document.getElementById('enroll-start-camera-btn').classList.add('hidden');
+    document.getElementById('enroll-capture-btn').classList.remove('hidden');
+    enrollCapturedBlob = null;
+    showToast('Camera started — position your face in the frame', 'info');
+  } catch (err) {
+    showToast('Camera access denied: ' + err.message, 'error');
+  }
+}
+
+function captureEnrollFrame() {
+  const video = document.getElementById('enroll-webcam-video');
+  const canvas = document.getElementById('enroll-webcam-canvas');
+  canvas.width  = video.videoWidth  || 640;
+  canvas.height = video.videoHeight || 480;
+  canvas.getContext('2d').drawImage(video, 0, 0);
+  canvas.toBlob(blob => {
+    enrollCapturedBlob = blob;
+    canvas.style.display = 'block';
+    video.style.display  = 'none';
+    document.getElementById('enroll-capture-btn').classList.add('hidden');
+    document.getElementById('enroll-retake-btn').classList.remove('hidden');
+    showToast('Photo captured — ready to enroll', 'success');
+  }, 'image/jpeg', 0.92);
+}
+
+function retakeEnrollPhoto() {
+  const video  = document.getElementById('enroll-webcam-video');
+  const canvas = document.getElementById('enroll-webcam-canvas');
+  canvas.style.display = 'none';
+  video.style.display  = 'block';
+  enrollCapturedBlob = null;
+  document.getElementById('enroll-capture-btn').classList.remove('hidden');
+  document.getElementById('enroll-retake-btn').classList.add('hidden');
+}
+
+function stopEnrollCamera() {
+  if (enrollCamStream) {
+    enrollCamStream.getTracks().forEach(t => t.stop());
+    enrollCamStream = null;
+  }
+}
 
 /* ═══════════════════════════════════════════════
    WEBCAM
@@ -1330,12 +1393,11 @@ loadEnrolledStudents();
 async function submitEnrollment() {
   const studentId   = document.getElementById('enroll-id').value.trim();
   const studentName = document.getElementById('enroll-name').value.trim();
-  const photoFile   = document.getElementById('enroll-photo').files[0];
   const idFile      = document.getElementById('enroll-id-doc').files[0];
 
   if (!studentId) { showToast('Please enter a student ID', 'error'); return; }
   if (!studentName) { showToast('Please enter the student name', 'error'); return; }
-  if (!photoFile) { showToast('Please upload a face photo', 'error'); return; }
+  if (!enrollCapturedBlob) { showToast('Please capture a face photo first', 'error'); return; }
 
   const btn = document.getElementById('enroll-submit-btn');
   const btnText = document.getElementById('enroll-btn-text');
@@ -1348,7 +1410,7 @@ async function submitEnrollment() {
     const form = new FormData();
     form.append('student_id',   studentId);
     form.append('student_name', studentName);
-    form.append('photo',        photoFile, photoFile.name);
+    form.append('photo',        enrollCapturedBlob, 'enroll_photo.jpg');
     if (idFile) form.append('id_document', idFile, idFile.name);
 
     const r = await fetch(API + '/enroll', { method: 'POST', body: form });
@@ -1357,6 +1419,17 @@ async function submitEnrollment() {
     if (r.ok && data.success) {
       showToast(`✓ ${studentName} enrolled successfully!`, 'success');
       loadEnrolledStudents();
+      // Reset enrollment camera
+      stopEnrollCamera();
+      enrollCapturedBlob = null;
+      const video  = document.getElementById('enroll-webcam-video');
+      const canvas = document.getElementById('enroll-webcam-canvas');
+      video.style.display = 'none';
+      canvas.style.display = 'none';
+      document.getElementById('enroll-webcam-placeholder').style.display = 'flex';
+      document.getElementById('enroll-start-camera-btn').classList.remove('hidden');
+      document.getElementById('enroll-capture-btn').classList.add('hidden');
+      document.getElementById('enroll-retake-btn').classList.add('hidden');
       // Auto-fill verify ID
       document.getElementById('verify-id').value = studentId;
     } else {
