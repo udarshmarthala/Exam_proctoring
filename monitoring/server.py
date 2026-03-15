@@ -20,6 +20,7 @@ import os
 import sys
 import uuid as uuid_lib
 from datetime import datetime, timezone
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -28,6 +29,13 @@ import numpy as np
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
+from concurrent.futures import ThreadPoolExecutor
+
+# Optional ultralytics YOLO for phone detection. If not installed, phone detection is disabled.
+try:
+  from ultralytics import YOLO
+except Exception:
+  YOLO = None
 
 # Do NOT import BehaviorMonitor or MonitoringConfig here. Loading them pulls in
 # MediaPipe/TFLite and libarrow, which can crash (SIGABRT/mutex) on macOS with
@@ -56,6 +64,10 @@ EVENT_TYPE_TO_FLAG = {
 app = FastAPI(title="Monitoring Test")
 _monitor = None
 _monitor_error: str | None = None
+
+# Module-level YOLO model and executor (lazy-initialized)
+_PHONE_YOLO = None
+_PHONE_EXECUTOR = None
 
 
 def get_monitor():
@@ -95,6 +107,60 @@ def get_keyboard_tracker():
         from monitoring.config import MonitoringConfig
         _keyboard_tracker = KeyboardTracker(MonitoringConfig())
     return _keyboard_tracker
+
+
+def _phone_detection_worker(frame_bgr, conf_thresh=0.35):
+  """Run a YOLO model on the provided BGR frame and return True if a phone-like
+  object is detected with confidence >= conf_thresh. This runs in a background
+  thread to avoid blocking the WebSocket loop.
+  """
+  global _PHONE_YOLO
+  if YOLO is None:
+    return False
+  try:
+    if _PHONE_YOLO is None:
+      # lazy-load the small YOLOv8 model (downloads if needed)
+      _PHONE_YOLO = YOLO('yolov8n.pt')
+  except Exception:
+    return False
+  try:
+    # convert to RGB for the model
+    rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+    results = _PHONE_YOLO(rgb, imgsz=320, conf=conf_thresh, verbose=False)
+    if not results:
+      return False
+    r = results[0]
+    boxes = getattr(r, 'boxes', None)
+    if boxes is None:
+      return False
+    cls_ids = getattr(boxes, 'cls', None)
+    confs = getattr(boxes, 'conf', None)
+    if cls_ids is None:
+      return False
+    for i, cid in enumerate(cls_ids):
+      try:
+        idx = int(cid.item()) if hasattr(cid, 'item') else int(cid)
+      except Exception:
+        try:
+          idx = int(cid)
+        except Exception:
+          continue
+      name = ''
+      try:
+        name = _PHONE_YOLO.names.get(idx, '') if hasattr(_PHONE_YOLO, 'names') else ''
+      except Exception:
+        name = ''
+      conf = 0.0
+      try:
+        conf = float(confs[i].item()) if hasattr(confs[i], 'item') else float(confs[i])
+      except Exception:
+        conf = 0.0
+      if name and ('phone' in name.lower() or 'cell' in name.lower()):
+        if conf >= conf_thresh:
+          return True
+    return False
+  except Exception:
+    return False
 
 HTML_PAGE = """<!DOCTYPE html>
 <html lang="en">
@@ -259,6 +325,11 @@ video { width: 640px; height: 480px; display: block; transform: scaleX(-1); }
     <video id="video" autoplay playsinline muted style="width:100%; max-width:240px;"></video>
     <canvas id="overlay" class="overlay" width="640" height="480" style="position:absolute; top:0; left:0; width:100%; max-width:240px; height:auto; pointer-events:none;"></canvas>
     <p style="margin-top:8px; font-size:11px; color:#7a9ab5;"><span id="status-dot" class="status-dot dot-green"></span> <span id="status-text">Tracking off</span></p>
+    <div style="display:flex; gap:8px; align-items:center; margin-top:8px;">
+      <input id="monitor-student-id" placeholder="Student ID (for reverify)" style="padding:8px; border-radius:6px; border:1px solid #1e2d3d; background:#0e1318; color:#c8d8e8;" />
+      <input id="reverify-interval" type="number" min="1" value="5" style="width:72px; padding:8px; border-radius:6px; border:1px solid #1e2d3d; background:#0e1318; color:#c8d8e8;" />
+      <span style="color:#7a9ab5; font-size:11px;">min</span>
+    </div>
     <button class="btn" id="startBtn" onclick="toggleStream()" style="margin-top:8px;">Start exam & camera</button>
   </div>
 </div>
@@ -334,6 +405,10 @@ let sendInterval = null;
 let proctoringEvents = [];
 let timerStarted = false;
 let l1DismissTimer = null;
+// Periodic re-verification (client-side): every N minutes capture a probe image and POST to identity API
+let reverifyIntervalId = null;
+let reverifyFailures = 0;
+const REVERIFY_API = 'http://localhost:8000/api/v1/verify';
 // Mouse/keyboard batches sent with each frame
 let mouseMovements = [];
 let mouseClicks = [];
@@ -347,6 +422,8 @@ const MAX_KEYBOARD_LOG = 80;
 let mouseLog = [];
 let keyboardLog = [];
 let pasteOccurred = false;
+// Audio/VAD state
+// (audio VAD removed in this build)
 
 function handleAlerts(alerts) {
   alerts.forEach(a => {
@@ -437,7 +514,7 @@ async function toggleStream() {
     return;
   }
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' } });
+  const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' } });
     video.srcObject = stream;
     await video.play();
     btn.textContent = 'Stop Monitoring';
@@ -452,11 +529,13 @@ async function toggleStream() {
 function stopStream() {
   streaming = false;
   if (sendInterval) { clearInterval(sendInterval); sendInterval = null; }
+  stopReverifyTimer();
   if (ws) { ws.close(); ws = null; }
   const stream = video.srcObject;
   if (stream) stream.getTracks().forEach(t => t.stop());
   video.srcObject = null;
   ctx.clearRect(0, 0, 640, 480);
+  // no audio teardown (audio VAD removed)
 }
 
 function connectWS() {
@@ -465,6 +544,8 @@ function connectWS() {
     addLog('Connected to monitoring server', false);
     // Send frames at ~5 fps
     sendInterval = setInterval(sendFrame, 200);
+    // Start periodic re-verification if configured
+    startReverifyTimerFromInputs();
   };
   ws.onmessage = (e) => {
     const data = JSON.parse(e.data);
@@ -521,13 +602,84 @@ function sendFrame() {
       last_snapshot: lastMouseSnapshot
     } : null,
     keys: keyEvents.length ? keyEvents.slice() : null,
-    paste_event: pasteOccurred
+    paste_event: pasteOccurred,
+    // no audio speaking flag (audio VAD removed)
   };
   pasteOccurred = false;
   ws.send(JSON.stringify(payload));
   mouseMovements = [];
   mouseClicks = [];
   keyEvents = [];
+}
+
+// --- Periodic re-verification functions ---------------------------------
+function startReverifyTimerFromInputs() {
+  const studentId = (document.getElementById('monitor-student-id') || {}).value || '';
+  const mins = parseInt((document.getElementById('reverify-interval') || {}).value || '5', 10);
+  if (!studentId || !mins || mins <= 0) return;
+  startReverifyTimer(studentId, mins);
+}
+
+function startReverifyTimer(studentId, minutes) {
+  stopReverifyTimer();
+  // run immediately then every minutes
+  doReverify(studentId);
+  reverifyIntervalId = setInterval(() => doReverify(studentId), minutes * 60 * 1000);
+  addLog('Started periodic re-verification every ' + minutes + ' min for ' + studentId, false);
+}
+
+function stopReverifyTimer() {
+  if (reverifyIntervalId) { clearInterval(reverifyIntervalId); reverifyIntervalId = null; addLog('Stopped periodic re-verification', false); }
+  reverifyFailures = 0;
+}
+
+function doReverify(studentId) {
+  if (!streaming || !studentId) return;
+  try {
+    const c = document.createElement('canvas');
+    c.width = 640; c.height = 480;
+    c.getContext('2d').drawImage(video, 0, 0, 640, 480);
+    c.toBlob(async function(blob) {
+      if (!blob) return;
+      const form = new FormData();
+      form.append('student_id', studentId);
+      form.append('photo', blob, 'probe.jpg');
+      try {
+        const res = await fetch(REVERIFY_API, { method: 'POST', body: form });
+        const json = await res.json();
+        handleReverifyResult(json);
+      } catch (err) {
+        addLog('Reverify request failed: ' + err.message, true);
+      }
+    }, 'image/jpeg', 0.7);
+  } catch (err) {
+    addLog('Reverify capture failed: ' + err.message, true);
+  }
+}
+
+function handleReverifyResult(json) {
+  if (!json) return;
+  if (json.success) {
+    reverifyFailures = 0;
+    // If we had prior failures, resolve them in the UI
+    if (reverifyFailures > 0) {
+      addLog('Reverify recovered for ' + (json.student_id || '') + ' — identity confirmed', false);
+      handleAlerts([{ level: 1, message: 'Identity re-verified — tracking OK' }]);
+    } else {
+      addLog('Reverify OK (' + json.student_id + ') conf=' + (json.confidence || 0).toFixed(3), false);
+    }
+    return;
+  }
+  reverifyFailures += 1;
+  addLog('Reverify FAILED for ' + (json.student_id || '') + ' · ' + (json.message || 'no message'), true);
+  // Treat any single reverify failure as a potential identity change and show L2 modal
+  if (reverifyFailures === 1) {
+    handleAlerts([{ level: 2, message: 'Identity mismatch detected — please re-align and look at the camera' }]);
+  } else if (reverifyFailures === 2) {
+    handleAlerts([{ level: 2, message: 'Repeated identity mismatch — please re-authenticate' }]);
+  } else {
+    handleAlerts([{ level: 3, message: 'Multiple identity mismatches — proctor alerted' }]);
+  }
 }
 
 function refreshInputLogs() {
@@ -630,6 +782,8 @@ function setupMouseKeyboardCapture() {
   document.addEventListener('paste', function() { pasteOccurred = true; });
 }
 document.addEventListener('DOMContentLoaded', setupMouseKeyboardCapture);
+
+// audio capture and VAD disabled in this build (reverted)
 
 function updateMetrics(d) {
   if (d.gaze) {
@@ -746,19 +900,38 @@ def _capture_screenshot(frame) -> str | None:
 
 
 def _parse_incoming(raw: str):
-    """Parse incoming message: JSON with frame + optional mouse/keys/paste_event, or legacy base64-only."""
-    raw = raw.strip()
-    if raw.startswith("{"):
-        try:
-            obj = json.loads(raw)
-            frame_b64 = obj.get("frame")
-            mouse = obj.get("mouse")
-            keys = obj.get("keys")
-            paste_event = bool(obj.get("paste_event"))
-            return frame_b64, mouse, keys, paste_event
-        except json.JSONDecodeError:
-            pass
-    return raw, None, None, False
+  """Parse incoming message: JSON with frame + optional mouse/keys/paste_event + student_id,
+  or legacy base64-only string (frame only).
+
+  Returns: frame_b64, mouse, keys, paste_event, student_id
+  """
+  raw = raw.strip()
+  if raw.startswith("{"):
+    try:
+      obj = json.loads(raw)
+      frame_b64 = obj.get("frame")
+      mouse = obj.get("mouse")
+      keys = obj.get("keys")
+      paste_event = bool(obj.get("paste_event"))
+      student_id = obj.get("student_id") if "student_id" in obj else None
+      return frame_b64, mouse, keys, paste_event, student_id
+    except json.JSONDecodeError:
+      pass
+  return raw, None, None, False, None
+
+
+def _find_enrolled_image(student_id: str) -> str | None:
+    """Return path to enrolled image for student_id if it exists (tries common extensions)."""
+    try:
+        from app.core.config import settings
+        base = Path(settings.ENROLLED_FACES_DIR)
+    except Exception:
+        return None
+    for ext in ('.jpg', '.jpeg', '.png', '.webp'):
+        p = base / f"{student_id}{ext}"
+        if p.exists():
+            return str(p)
+    return None
 
 
 @app.websocket("/ws/monitor")
@@ -771,11 +944,24 @@ async def ws_monitor(websocket: WebSocket):
     session_start: float | None = None
     last_l2_time: float = 0.0
     L2_COOLDOWN_S = 30.0
+    # Server-side re-verification state
+    reverify_last_time: float = 0.0
+    reverify_failures: int = 0
+    REVERIFY_INTERVAL_S: float = 5.0
+    # Phone detection state (uses background YOLO worker)
+    phone_future = None
+    phone_detect_start: float | None = None
+    phone_flagged = False
+    PHONE_CHECK_INTERVAL_S = 0.5
+    PHONE_DEBOUNCE_S = 2.0
+    PHONE_CONF_THRESH = 0.35
+    last_phone_check_time: float = 0.0
+  # Audio/background-voice detection state removed (VAD reverted)
 
     try:
         while True:
             raw = await websocket.receive_text()
-            frame_b64, mouse_data, key_events, paste_event = _parse_incoming(raw)
+            frame_b64, mouse_data, key_events, paste_event, student_id = _parse_incoming(raw)
             if not frame_b64:
                 await websocket.send_json({"error": "Missing frame data"})
                 continue
@@ -855,6 +1041,34 @@ async def ws_monitor(websocket: WebSocket):
 
             # Proctoring alerts: create ProctoringEvent, capture screenshot for L2/L3
             alerts_to_send: list[dict] = []
+            # Detect multiple people (or another human) visible in the camera -> immediate L2
+            try:
+                if getattr(result, 'face_count', 0) and result.face_count > 1:
+                    if (now - last_l2_time) >= L2_COOLDOWN_S:
+                        last_l2_time = now
+                        screenshot_ref = _capture_screenshot(frame)
+                        pe = {
+                            "id": str(uuid_lib.uuid4()),
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "event_type": "multiple_faces",
+                            "severity": 2,
+                            "duration_ms": 0,
+                            "head_yaw": None,
+                            "head_pitch": None,
+                            "gaze_vector": None,
+                            "confidence_score": 0.0,
+                            "screenshot_ref": screenshot_ref,
+                            "dismissed": False,
+                            "flagged_by_proctor": False,
+                            "message": f"Multiple faces detected ({result.face_count})",
+                        }
+                        proctoring_events.append(pe)
+                        if len(proctoring_events) > 500:
+                            proctoring_events.pop(0)
+                        alerts_to_send.append({"level": 2, "event_type": "multiple_faces", "message": pe["message"], "id": pe["id"]})
+            except Exception:
+                # don't let this detection crash the WS loop
+                pass
             all_alerts = list(getattr(result, "alerts", []) or []) + extra_alerts
             for al in all_alerts:
                 level = al.get("level", 1)
@@ -894,6 +1108,136 @@ async def ws_monitor(websocket: WebSocket):
                     new_events.append(entry)
                     if len(event_log) > max_log_entries:
                         event_log.pop(0)
+
+            # Server-side periodic re-verification (every REVERIFY_INTERVAL_S seconds)
+            if student_id:
+                try:
+                    if (now - reverify_last_time) >= REVERIFY_INTERVAL_S:
+                        reverify_last_time = now
+                        enrolled_path = _find_enrolled_image(student_id)
+                        if enrolled_path:
+                            try:
+                                from app.core.config import settings
+                                # save probe to temp file
+                                probe_path = Path(settings.UPLOAD_DIR) / f"probe_ws_{uuid_lib.uuid4().hex}.jpg"
+                                cv2.imwrite(str(probe_path), frame)
+                                # run DeepFace.verify
+                                from deepface import DeepFace
+                                v = DeepFace.verify(
+                                    img1_path=str(probe_path),
+                                    img2_path=str(enrolled_path),
+                                    model_name=settings.DEEPFACE_MODEL,
+                                    detector_backend=settings.DEEPFACE_DETECTOR,
+                                    distance_metric=settings.DEEPFACE_DISTANCE_METRIC,
+                                    enforce_detection=False,
+                                    silent=True,
+                                )
+                                verified = bool(v.get("verified", False))
+                                distance = float(v.get("distance", 1.0))
+                                threshold = float(v.get("threshold", settings.VERIFICATION_THRESHOLD))
+                                # mismatch -> create proctoring event + alert
+                                if not verified:
+                                    reverify_failures += 1
+                                    screenshot_ref = _capture_screenshot(frame)
+                                    pe = {
+                                        "id": str(uuid_lib.uuid4()),
+                                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                                        "event_type": "identity_mismatch",
+                                        "severity": 2,
+                                        "duration_ms": 0,
+                                        "head_yaw": None,
+                                        "head_pitch": None,
+                                        "gaze_vector": None,
+                                        "confidence_score": 1.0 - min(max(distance / max(threshold * 2, 0.001), 0.0), 1.0),
+                                        "screenshot_ref": screenshot_ref,
+                                        "dismissed": False,
+                                        "flagged_by_proctor": False,
+                                        "message": f"Identity mismatch detected (distance={distance:.4f})",
+                                    }
+                                    proctoring_events.append(pe)
+                                    if len(proctoring_events) > 500:
+                                        proctoring_events.pop(0)
+                                    alerts_to_send.append({"level": 2, "event_type": "identity_mismatch", "message": pe["message"], "id": pe["id"]})
+                                else:
+                                    if reverify_failures > 0:
+                                        # resolved entry
+                                        entry = _event_entry(now, BehaviorFlag.NORMAL, EventSeverity.RESOLVED, "Identity re-verified")
+                                        event_log.append(entry)
+                                        new_events.append(entry)
+                                    reverify_failures = 0
+                            finally:
+                                try:
+                                    probe_path.unlink(missing_ok=True)
+                                except Exception:
+                                    pass
+                        else:
+                            # no enrolled image found for this student
+                            pass
+                except Exception as exc:  # don't let verification crash the WS loop
+                    # record a lightweight event
+                    try:
+                        entry = _event_entry(now, BehaviorFlag.NORMAL, EventSeverity.WARNING, f"Reverify error: {exc}")
+                        event_log.append(entry)
+                        new_events.append(entry)
+                    except Exception:
+                        pass
+
+            # Phone detection (background YOLO). We check results from a background
+            # future and schedule new work every PHONE_CHECK_INTERVAL_S seconds.
+            try:
+                global _PHONE_EXECUTOR
+                if _PHONE_EXECUTOR is None:
+                    _PHONE_EXECUTOR = ThreadPoolExecutor(max_workers=1)
+
+                # collect finished future
+                if phone_future is not None and phone_future.done():
+                    detected = False
+                    try:
+                        detected = bool(phone_future.result(timeout=0))
+                    except Exception:
+                        detected = False
+                    phone_future = None
+                    if detected:
+                        if phone_detect_start is None:
+                            phone_detect_start = now
+                        if phone_detect_start is not None and (now - phone_detect_start) >= PHONE_DEBOUNCE_S and not phone_flagged:
+                            phone_flagged = True
+                            screenshot_ref = _capture_screenshot(frame)
+                            pe = {
+                                "id": str(uuid_lib.uuid4()),
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                                "event_type": ProctoringEventType.possible_phone.value,
+                                "severity": 2,
+                                "duration_ms": 0,
+                                "head_yaw": None,
+                                "head_pitch": None,
+                                "gaze_vector": None,
+                                "confidence_score": None,
+                                "screenshot_ref": screenshot_ref,
+                                "dismissed": False,
+                                "flagged_by_proctor": False,
+                                "message": "Phone detected (sustained)",
+                            }
+                            proctoring_events.append(pe)
+                            if len(proctoring_events) > 500:
+                                proctoring_events.pop(0)
+                            alerts_to_send.append({"level": 2, "event_type": ProctoringEventType.possible_phone.value, "message": pe["message"], "id": pe["id"]})
+                    else:
+                        phone_detect_start = None
+                        phone_flagged = False
+
+                # schedule detection work if none pending
+                if phone_future is None and (now - last_phone_check_time) >= PHONE_CHECK_INTERVAL_S and YOLO is not None:
+                    last_phone_check_time = now
+                    try:
+                        phone_future = _PHONE_EXECUTOR.submit(_phone_detection_worker, frame.copy(), PHONE_CONF_THRESH)
+                    except Exception:
+                        phone_future = None
+            except Exception:
+                # keep WS loop resilient to detection failures
+                pass
+
+      # Audio VAD logic removed (reverted to pre-audio state)
 
             response = {
                 "face_count": result.face_count,

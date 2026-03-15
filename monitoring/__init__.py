@@ -1,4 +1,3 @@
-from monitoring.behavior_monitor import BehaviorMonitor
 from monitoring.models import (
     MonitoringFrame,
     GazeDirection,

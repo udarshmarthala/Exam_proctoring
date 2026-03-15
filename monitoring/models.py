@@ -14,6 +14,8 @@ class ProctoringEventType(str, Enum):
     multiple_faces = "multiple_faces"
     eye_closure = "eye_closure"
     camera_blocked = "camera_blocked"
+    multiple_people_talking = "multiple_people_talking"
+    possible_phone = "possible_phone"
     # Mouse
     mouse_leave_window = "mouse_leave_window"
     mouse_erratic = "mouse_erratic"
@@ -177,3 +179,4 @@ class MonitoringFrame(BaseModel):
     # Smoothed values (after 500ms rolling average)
     confidence: float = 0.0
     low_light: bool = False
+    # (no speaking indicators in this model version)

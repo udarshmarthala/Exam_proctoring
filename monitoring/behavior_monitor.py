@@ -15,6 +15,22 @@ from mediapipe.tasks.python.vision import (
     FaceLandmarkerOptions,
     RunningMode,
 )
+# Robust import for MediaPipe Hands: different installs expose the module in
+# slightly different locations. Try a few fallbacks and set MPHands=None if
+# none are available so the code can continue without crashing.
+try:
+    from mediapipe.solutions.hands import Hands as MPHands
+except Exception:
+    try:
+        import mediapipe as mp
+        MPHands = getattr(mp.solutions, 'hands').Hands
+    except Exception:
+        try:
+            # Older installs may expose a direct hands module
+            from mediapipe import hands as mp_hands_module
+            MPHands = mp_hands_module.Hands
+        except Exception:
+            MPHands = None
 
 from monitoring.config import MonitoringConfig
 from monitoring.gaze_tracker import GazeTracker
@@ -87,6 +103,15 @@ class BehaviorMonitor:
         )
         self._landmarker = FaceLandmarker.create_from_options(options)
 
+        # Initialize MediaPipe Hands for simple hand/phone heuristics (static image mode)
+        try:
+            if MPHands is not None:
+                self._hands = MPHands(static_image_mode=True, max_num_hands=2, min_detection_confidence=0.5)
+            else:
+                self._hands = None
+        except Exception:
+            self._hands = None
+
         self._flag_timers: Dict[BehaviorFlag, float] = {}
         self._session_start: Optional[float] = None
         self._smooth_window_s = self.config.smoothing_window_ms / 1000.0
@@ -104,6 +129,8 @@ class BehaviorMonitor:
         self._sneeze_suppress_until: float = 0.0
         self._last_eye_close_time: Optional[float] = None
         self._last_head_deviation_time: Optional[float] = None
+        # Mouth buffers for per-face lip movement detection (deque of (t, mouth_open_ratio))
+        self._mouth_buffers: List[Deque[Tuple[float, float]]] = [deque(maxlen=64) for _ in range(self.config.max_num_faces)]
 
     def _in_grace(self, now: float) -> bool:
         if self._session_start is None:
@@ -152,6 +179,7 @@ class BehaviorMonitor:
         face_count = 0
         gaze: Optional[GazeResult] = None
         head_pose: Optional[HeadPoseResult] = None
+    # per-face visual speaking flags removed (reverted)
         flags: List[BehaviorFlag] = []
         alerts: List[dict] = []
         confidence = 0.0
@@ -183,11 +211,63 @@ class BehaviorMonitor:
             # Use smoothed for thresholds
             head_pose = smooth_pose
             gaze = smooth_gaze or gaze
-
+            # (visual speaking detection disabled)
             # ----- Multiple faces → L2 immediately -----
             if face_count > 1 and not self._in_grace(now):
                 flags.append(BehaviorFlag.MULTIPLE_FACES)
                 self._add_alert(alerts, 2, ProctoringEventType.multiple_faces.value, "Multiple faces detected", now)
+
+            # ----- Simple phone/object detection: hand near face → L2 -----
+            try:
+                if self._hands is not None:
+                    hands_result = self._hands.process(rgb)
+                    if hands_result and hands_result.multi_hand_landmarks:
+                        # compute approximate face center in normalized coords from face landmarks
+                        lm = primary.landmark
+                        fx = sum(p.x for p in lm) / len(lm)
+                        fy = sum(p.y for p in lm) / len(lm)
+                        # check each hand; index finger tip is landmark 8
+                        for hlandmarks in hands_result.multi_hand_landmarks:
+                            hx = hlandmarks.landmark[8].x
+                            hy = hlandmarks.landmark[8].y
+                            # normalized euclidean distance
+                            dist = ((fx - hx) ** 2 + (fy - hy) ** 2) ** 0.5
+                            # threshold: if hand index tip within ~0.18 of face center → likely near-face (tuneable)
+                            if dist < 0.18 and not self._in_grace(now):
+                                self._add_alert(alerts, 2, ProctoringEventType.possible_phone.value, "Hand/object near face — possible phone", now)
+                                break
+            except Exception:
+                # don't let hand detection crash the monitor
+                pass
+
+            # compute mouth openness per face for lip-movement (talking) detection
+            mouth_opens: List[float] = []
+            for fi, fl in enumerate(results.face_landmarks):
+                try:
+                    lm = fl
+                    # try common inner-lip indices (fallback tolerant)
+                    # Primary pair: 13 (upper inner lip), 14 (lower inner lip)
+                    upper_y = lm[13].y
+                    lower_y = lm[14].y
+                except Exception:
+                    try:
+                        # alternative indices: 0-based face mesh: 61 upper, 291 lower
+                        upper_y = lm[13].y if len(lm) > 13 else 0.0
+                        lower_y = lm[14].y if len(lm) > 14 else 0.0
+                    except Exception:
+                        upper_y = 0.0
+                        lower_y = 0.0
+                # normalize mouth opening by face height (approx using landmarks y-range)
+                try:
+                    ys = [p.y for p in lm]
+                    face_h = max(1e-6, max(ys) - min(ys))
+                    mouth_open = max(0.0, lower_y - upper_y) / face_h
+                except Exception:
+                    mouth_open = 0.0
+                mouth_opens.append(mouth_open)
+                # append to buffer (bounded by config.max_num_faces)
+                if fi < len(self._mouth_buffers):
+                    self._mouth_buffers[fi].append((now, mouth_open))
 
             # ----- Yaw > 30° → L2 even brief -----
             if not self.config.disable_yaw and not self._in_grace(now):
@@ -368,4 +448,12 @@ class BehaviorMonitor:
         self._last_head_deviation_time = None
 
     def release(self) -> None:
-        self._landmarker.close()
+        try:
+            self._landmarker.close()
+        except Exception:
+            pass
+        try:
+            if getattr(self, '_hands', None) is not None:
+                self._hands.close()
+        except Exception:
+            pass
