@@ -16,6 +16,7 @@ class ProctoringEventType(str, Enum):
     camera_blocked = "camera_blocked"
     multiple_people_talking = "multiple_people_talking"
     possible_phone = "possible_phone"
+    talking_detected = "talking_detected"
     # Mouse
     mouse_leave_window = "mouse_leave_window"
     mouse_erratic = "mouse_erratic"
@@ -57,6 +58,7 @@ class BehaviorFlag(str, Enum):
     COPY_PASTE_SUSPECTED = "copy_paste_suspected"
     PASTE_USED = "paste_used"
     KEYBOARD_INACTIVE = "keyboard_inactive"
+    TALKING = "talking"
 
 
 class EventSeverity(str, Enum):
@@ -82,6 +84,7 @@ FLAG_SEVERITY: dict[BehaviorFlag, EventSeverity] = {
     BehaviorFlag.COPY_PASTE_SUSPECTED: EventSeverity.WARNING,
     BehaviorFlag.PASTE_USED: EventSeverity.CRITICAL,
     BehaviorFlag.KEYBOARD_INACTIVE: EventSeverity.INFO,
+    BehaviorFlag.TALKING: EventSeverity.WARNING,
 }
 
 # Human-readable messages for audit log
@@ -99,6 +102,7 @@ EVENT_MESSAGES: dict[BehaviorFlag, str] = {
     BehaviorFlag.COPY_PASTE_SUSPECTED: "Typing pause suggests copy-paste",
     BehaviorFlag.PASTE_USED: "Paste used (clipboard)",
     BehaviorFlag.KEYBOARD_INACTIVE: "Prolonged keyboard inactivity",
+    BehaviorFlag.TALKING: "Lip movement detected — possible talking",
 }
 
 
@@ -179,4 +183,6 @@ class MonitoringFrame(BaseModel):
     # Smoothed values (after 500ms rolling average)
     confidence: float = 0.0
     low_light: bool = False
-    # (no speaking indicators in this model version)
+    # Lip movement / talking detection
+    talking: bool = False
+    mouth_open_ratio: float = 0.0

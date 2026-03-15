@@ -59,6 +59,7 @@ EVENT_TYPE_TO_FLAG = {
     "copy_paste_suspected": BehaviorFlag.COPY_PASTE_SUSPECTED,
     "paste_used": BehaviorFlag.PASTE_USED,
     "keyboard_inactivity": BehaviorFlag.KEYBOARD_INACTIVE,
+    "talking_detected": BehaviorFlag.TALKING,
 }
 
 app = FastAPI(title="Monitoring Test")
@@ -365,6 +366,22 @@ video { width: 640px; height: 480px; display: block; transform: scaleX(-1); }
       <span class="metric-label">Faces Detected</span>
       <span class="metric-value" id="m-faces">—</span>
     </div>
+    <div class="metric">
+      <span class="metric-label">Lip Movement</span>
+      <span class="metric-value" id="m-talking">—</span>
+    </div>
+    <div class="metric">
+      <span class="metric-label">Mouth Open Ratio</span>
+      <span class="metric-value" id="m-mouth">—</span>
+    </div>
+    <div class="metric">
+      <span class="metric-label">Voice (Mic)</span>
+      <span class="metric-value" id="m-voice">—</span>
+    </div>
+    <div class="metric">
+      <span class="metric-label">Audio Level</span>
+      <span class="metric-value" id="m-audio">—</span>
+    </div>
     <h2 style="margin-top:18px;">Active Flags</h2>
     <div class="flag-list" id="flags">
       <span class="flag flag-normal">WAITING</span>
@@ -402,6 +419,9 @@ const ctx = canvas.getContext('2d');
 let ws = null;
 let streaming = false;
 let sendInterval = null;
+let audioCtx = null;
+let audioAnalyser = null;
+let audioDataArray = null;
 let proctoringEvents = [];
 let timerStarted = false;
 let l1DismissTimer = null;
@@ -422,8 +442,18 @@ const MAX_KEYBOARD_LOG = 80;
 let mouseLog = [];
 let keyboardLog = [];
 let pasteOccurred = false;
-// Audio/VAD state
-// (audio VAD removed in this build)
+function getAudioLevel() {
+  if (!audioAnalyser || !audioDataArray) return 0;
+  // Resume AudioContext if suspended (browsers require user gesture)
+  if (audioCtx && audioCtx.state === 'suspended') { audioCtx.resume(); }
+  audioAnalyser.getByteTimeDomainData(audioDataArray);
+  let sum = 0;
+  for (let i = 0; i < audioDataArray.length; i++) {
+    const v = (audioDataArray[i] - 128) / 128.0;
+    sum += v * v;
+  }
+  return Math.sqrt(sum / audioDataArray.length);  // RMS 0.0-1.0
+}
 
 function handleAlerts(alerts) {
   alerts.forEach(a => {
@@ -514,15 +544,30 @@ async function toggleStream() {
     return;
   }
   try {
-  const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' } });
+  const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' }, audio: true });
     video.srcObject = stream;
     await video.play();
+    // Set up audio analysis for voice activity detection
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') await audioCtx.resume();
+      const source = audioCtx.createMediaStreamSource(stream);
+      audioAnalyser = audioCtx.createAnalyser();
+      audioAnalyser.fftSize = 512;
+      audioAnalyser.smoothingTimeConstant = 0.3;
+      source.connect(audioAnalyser);
+      audioDataArray = new Uint8Array(audioAnalyser.fftSize);
+      addLog('Microphone enabled for voice detection', false);
+    } catch (ae) {
+      addLog('Audio init error (voice detection disabled): ' + ae.message, true);
+      audioCtx = null; audioAnalyser = null; audioDataArray = null;
+    }
     btn.textContent = 'Stop Monitoring';
     btn.classList.add('active');
     streaming = true;
     connectWS();
   } catch (e) {
-    addLog('Camera error: ' + e.message, true);
+    addLog('Camera/mic error: ' + e.message, true);
   }
 }
 
@@ -535,7 +580,7 @@ function stopStream() {
   if (stream) stream.getTracks().forEach(t => t.stop());
   video.srcObject = null;
   ctx.clearRect(0, 0, 640, 480);
-  // no audio teardown (audio VAD removed)
+  if (audioCtx) { try { audioCtx.close(); } catch(e){} audioCtx = null; audioAnalyser = null; audioDataArray = null; }
 }
 
 function connectWS() {
@@ -603,7 +648,7 @@ function sendFrame() {
     } : null,
     keys: keyEvents.length ? keyEvents.slice() : null,
     paste_event: pasteOccurred,
-    // no audio speaking flag (audio VAD removed)
+    audio_level: getAudioLevel(),
   };
   pasteOccurred = false;
   ws.send(JSON.stringify(payload));
@@ -805,6 +850,23 @@ function updateMetrics(d) {
   const fcColor = fc === 1 ? '#00ff88' : (fc === 0 ? '#ff3d5a' : '#ffaa00');
   document.getElementById('m-faces').innerHTML = '<span style="color:' + fcColor + '">' + fc + '</span>';
 
+  // Lip movement / talking
+  const talking = d.talking || false;
+  const talkColor = talking ? '#ff3d5a' : '#00ff88';
+  const talkLabel = talking ? 'TALKING' : 'SILENT';
+  document.getElementById('m-talking').innerHTML = '<span style="color:' + talkColor + '">' + talkLabel + '</span>';
+  const mar = d.mouth_open_ratio || 0;
+  document.getElementById('m-mouth').textContent = mar.toFixed(4);
+
+  // Voice (microphone)
+  const voiceDetected = d.voice_detected || false;
+  const voiceColor = voiceDetected ? '#ff3d5a' : '#00ff88';
+  const voiceLabel = voiceDetected ? 'SPEAKING' : 'QUIET';
+  document.getElementById('m-voice').innerHTML = '<span style="color:' + voiceColor + '">' + voiceLabel + '</span>';
+  const audioLvl = d.audio_level || 0;
+  const audioBarWidth = Math.min(audioLvl * 500, 100);
+  document.getElementById('m-audio').innerHTML = '<span style="color:#00d4ff">' + audioLvl.toFixed(4) + '</span> <span style="display:inline-block;width:60px;height:8px;background:#1a2530;border-radius:4px;vertical-align:middle;overflow:hidden;"><span style="display:block;width:' + audioBarWidth + '%;height:100%;background:' + (voiceDetected ? '#ff3d5a' : '#00d4ff') + ';border-radius:4px;transition:width 0.15s;"></span></span>';
+
   // Flags
   const flagsEl = document.getElementById('flags');
   flagsEl.innerHTML = '';
@@ -900,10 +962,10 @@ def _capture_screenshot(frame) -> str | None:
 
 
 def _parse_incoming(raw: str):
-  """Parse incoming message: JSON with frame + optional mouse/keys/paste_event + student_id,
+  """Parse incoming message: JSON with frame + optional mouse/keys/paste_event/audio_level + student_id,
   or legacy base64-only string (frame only).
 
-  Returns: frame_b64, mouse, keys, paste_event, student_id
+  Returns: frame_b64, mouse, keys, paste_event, audio_level, student_id
   """
   raw = raw.strip()
   if raw.startswith("{"):
@@ -913,11 +975,12 @@ def _parse_incoming(raw: str):
       mouse = obj.get("mouse")
       keys = obj.get("keys")
       paste_event = bool(obj.get("paste_event"))
+      audio_level = float(obj.get("audio_level", 0.0))
       student_id = obj.get("student_id") if "student_id" in obj else None
-      return frame_b64, mouse, keys, paste_event, student_id
+      return frame_b64, mouse, keys, paste_event, audio_level, student_id
     except json.JSONDecodeError:
       pass
-  return raw, None, None, False, None
+  return raw, None, None, False, 0.0, None
 
 
 def _find_enrolled_image(student_id: str) -> str | None:
@@ -956,12 +1019,18 @@ async def ws_monitor(websocket: WebSocket):
     PHONE_DEBOUNCE_S = 2.0
     PHONE_CONF_THRESH = 0.35
     last_phone_check_time: float = 0.0
-  # Audio/background-voice detection state removed (VAD reverted)
+    # Voice activity detection state
+    VOICE_THRESHOLD = 0.015  # RMS above this = voice detected
+    voice_detected = False
+    voice_start: float = 0.0
+    VOICE_SUSTAINED_S = 1.0  # sustained voice before alert
+    VOICE_COOLDOWN_S = 8.0
+    last_voice_alert: float = 0.0
 
     try:
         while True:
             raw = await websocket.receive_text()
-            frame_b64, mouse_data, key_events, paste_event, student_id = _parse_incoming(raw)
+            frame_b64, mouse_data, key_events, paste_event, audio_level, student_id = _parse_incoming(raw)
             if not frame_b64:
                 await websocket.send_json({"error": "Missing frame data"})
                 continue
@@ -1237,7 +1306,53 @@ async def ws_monitor(websocket: WebSocket):
                 # keep WS loop resilient to detection failures
                 pass
 
-      # Audio VAD logic removed (reverted to pre-audio state)
+            # ----- Voice Activity Detection (microphone audio level) -----
+            # DEBUG: log audio levels periodically
+            if int(now * 10) % 10 == 0:
+                print(f"[VOICE] audio_level={audio_level:.4f} threshold={VOICE_THRESHOLD} detected={audio_level >= VOICE_THRESHOLD}")
+            voice_detected = audio_level >= VOICE_THRESHOLD
+            if voice_detected:
+                if voice_start == 0.0:
+                    voice_start = now
+                elif (now - voice_start) >= VOICE_SUSTAINED_S and (now - last_voice_alert) >= VOICE_COOLDOWN_S:
+                    last_voice_alert = now
+                    voice_duration = now - voice_start
+                    voice_start = 0.0
+                    screenshot_ref = _capture_screenshot(frame)
+                    # L1 alert for voice detected
+                    pe = {
+                        "id": str(uuid_lib.uuid4()),
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "event_type": "talking_detected",
+                        "severity": 1,
+                        "duration_ms": voice_duration * 1000,
+                        "head_yaw": None,
+                        "head_pitch": None,
+                        "gaze_vector": None,
+                        "confidence_score": min(audio_level * 10, 1.0),
+                        "screenshot_ref": screenshot_ref,
+                        "dismissed": False,
+                        "flagged_by_proctor": False,
+                        "message": f"Voice detected — audio level {audio_level:.3f}",
+                    }
+                    proctoring_events.append(pe)
+                    # Send as a real L1 alert so the yellow banner shows
+                    alerts_to_send.append({
+                        "level": 1,
+                        "event_type": "talking_detected",
+                        "message": f"Voice detected — please remain silent during the exam",
+                        "duration_ms": voice_duration * 1000,
+                        "head_yaw": None,
+                        "head_pitch": None,
+                        "gaze_vector": None,
+                        "confidence_score": min(audio_level * 10, 1.0),
+                    })
+                    flag = BehaviorFlag.TALKING
+                    sev = FLAG_SEVERITY.get(flag, EventSeverity.WARNING)
+                    event_log.append(_event_entry(now, flag, sev, "Voice detected via microphone"))
+                    new_events.append(event_log[-1])
+            else:
+                voice_start = 0.0
 
             response = {
                 "face_count": result.face_count,
@@ -1250,6 +1365,10 @@ async def ws_monitor(websocket: WebSocket):
                 "proctoring_events": proctoring_events[-200:],
                 "confidence": getattr(result, "confidence", 0),
                 "low_light": getattr(result, "low_light", False),
+                "talking": getattr(result, "talking", False) or voice_detected,
+                "mouth_open_ratio": getattr(result, "mouth_open_ratio", 0.0),
+                "voice_detected": voice_detected,
+                "audio_level": round(audio_level, 4),
                 "session_start": session_start,
             }
             if result.gaze:

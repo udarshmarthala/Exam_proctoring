@@ -131,6 +131,8 @@ class BehaviorMonitor:
         self._last_head_deviation_time: Optional[float] = None
         # Mouth buffers for per-face lip movement detection (deque of (t, mouth_open_ratio))
         self._mouth_buffers: List[Deque[Tuple[float, float]]] = [deque(maxlen=64) for _ in range(self.config.max_num_faces)]
+        self._talking_start: Optional[float] = None
+        self._last_talking_alert: float = 0.0
 
     def _in_grace(self, now: float) -> bool:
         if self._session_start is None:
@@ -179,7 +181,8 @@ class BehaviorMonitor:
         face_count = 0
         gaze: Optional[GazeResult] = None
         head_pose: Optional[HeadPoseResult] = None
-    # per-face visual speaking flags removed (reverted)
+        talking_detected = False
+        mouth_ratio = 0.0
         flags: List[BehaviorFlag] = []
         alerts: List[dict] = []
         confidence = 0.0
@@ -211,7 +214,6 @@ class BehaviorMonitor:
             # Use smoothed for thresholds
             head_pose = smooth_pose
             gaze = smooth_gaze or gaze
-            # (visual speaking detection disabled)
             # ----- Multiple faces → L2 immediately -----
             if face_count > 1 and not self._in_grace(now):
                 flags.append(BehaviorFlag.MULTIPLE_FACES)
@@ -268,6 +270,45 @@ class BehaviorMonitor:
                 # append to buffer (bounded by config.max_num_faces)
                 if fi < len(self._mouth_buffers):
                     self._mouth_buffers[fi].append((now, mouth_open))
+
+            # ----- Lip movement / talking detection -----
+            if mouth_opens:
+                mouth_ratio = mouth_opens[0]
+                buf = self._mouth_buffers[0] if self._mouth_buffers else None
+                if buf and len(buf) >= 4:
+                    # Prune buffer to talking window
+                    window_cutoff = now - self.config.talking_window_s
+                    while buf and buf[0][0] < window_cutoff:
+                        buf.popleft()
+                    if len(buf) >= 4:
+                        ratios = [r for _, r in buf]
+                        variance = float(np.var(ratios))
+                        mean_ratio = float(np.mean(ratios))
+                        # DEBUG: print every ~1s (every 7th frame at ~7fps)
+                        if int(now * 10) % 7 == 0:
+                            print(f"[LIP] mar={mouth_ratio:.4f} mean={mean_ratio:.4f} var={variance:.6f} buf={len(buf)}")
+                        # Talking = mouth is moving (high variance) and opens noticeably
+                        if (variance >= self.config.talking_variance_threshold
+                                and mean_ratio >= self.config.mouth_open_threshold):
+                            talking_detected = True
+                            if self._talking_start is None:
+                                self._talking_start = now
+                            elif ((now - self._talking_start) >= self.config.talking_sustained_s
+                                  and not self._in_grace(now)
+                                  and (now - self._last_talking_alert) >= self.config.talking_cooldown_s):
+                                flags.append(BehaviorFlag.TALKING)
+                                self._add_alert(
+                                    alerts, 1, ProctoringEventType.talking_detected.value,
+                                    "Lip movement detected — possible talking", now,
+                                    duration_ms=(now - self._talking_start) * 1000,
+                                    head_pose=head_pose, gaze=gaze, confidence=confidence,
+                                )
+                                self._last_talking_alert = now
+                                self._talking_start = None
+                        else:
+                            self._talking_start = None
+                else:
+                    self._talking_start = None
 
             # ----- Yaw > 30° → L2 even brief -----
             if not self.config.disable_yaw and not self._in_grace(now):
@@ -427,6 +468,8 @@ class BehaviorMonitor:
             alerts=alerts,
             confidence=confidence,
             low_light=low_light,
+            talking=talking_detected,
+            mouth_open_ratio=round(mouth_ratio, 4),
         )
 
     def reset(self) -> None:
@@ -446,6 +489,10 @@ class BehaviorMonitor:
         self._sneeze_suppress_until = 0.0
         self._last_eye_close_time = None
         self._last_head_deviation_time = None
+        self._talking_start = None
+        self._last_talking_alert = 0.0
+        for buf in self._mouth_buffers:
+            buf.clear()
 
     def release(self) -> None:
         try:

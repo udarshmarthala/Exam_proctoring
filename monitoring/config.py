@@ -82,3 +82,10 @@ class MonitoringConfig:
     copy_paste_pause_ms: float = 500.0     # pause > 500ms after key suggests paste
     keyboard_inactivity_s: float = 120.0   # L1 after no keys for 2 min (exam-dependent)
     keystroke_dynamics_window: int = 20   # last N key intervals for dynamics (identity)
+
+    # ----- Lip movement / talking detection -----
+    mouth_open_threshold: float = 0.03     # MAR above this = mouth noticeably open
+    talking_variance_threshold: float = 0.0001  # variance in MAR over window → talking
+    talking_window_s: float = 1.0          # sliding window for variance calculation
+    talking_sustained_s: float = 1.5       # sustained talking before L1 alert
+    talking_cooldown_s: float = 10.0       # min seconds between repeated talking alerts
