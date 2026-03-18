@@ -1119,6 +1119,14 @@ hr.divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; 
         </div>
       </div>
 
+      <!-- Start Exam (only on approved) -->
+      <div id="exam-section" class="card hidden" style="text-align:center; padding:24px;">
+        <p style="color:var(--green); font-size:14px; font-weight:600; margin-bottom:12px;">Identity verified — you may now start the exam</p>
+        <button class="btn btn-primary" id="start-exam-btn" style="font-size:15px; padding:12px 32px; background:var(--green); color:var(--bg); border:none; font-weight:700; letter-spacing:0.04em;" onclick="startExamSession()">
+          Start Exam Session
+        </button>
+      </div>
+
       <!-- Agent trace -->
       <div class="card mt-20" id="trace-section">
         <div class="card-label">LangGraph Agent Trace</div>
@@ -1377,7 +1385,7 @@ async function loadEnrolledStudents() {
       list.innerHTML = '<span style="color:var(--text3); font-size:12px;">No students enrolled yet</span>';
     } else {
       list.innerHTML = data.enrolled_students
-        .map(id => `<span class="student-chip">${id}</span>`)
+        .map(s => `<span class="student-chip">${s.name || s.id || s} (${s.id || ''})</span>`)
         .join('');
     }
   } catch {
@@ -1417,21 +1425,15 @@ async function submitEnrollment() {
     const data = await r.json();
 
     if (r.ok && data.success) {
-      showToast(`✓ ${studentName} enrolled successfully!`, 'success');
-      loadEnrolledStudents();
-      // Reset enrollment camera
+      showToast(`✓ ${studentName} enrolled — starting exam session…`, 'success');
       stopEnrollCamera();
-      enrollCapturedBlob = null;
-      const video  = document.getElementById('enroll-webcam-video');
-      const canvas = document.getElementById('enroll-webcam-canvas');
-      video.style.display = 'none';
-      canvas.style.display = 'none';
-      document.getElementById('enroll-webcam-placeholder').style.display = 'flex';
-      document.getElementById('enroll-start-camera-btn').classList.remove('hidden');
-      document.getElementById('enroll-capture-btn').classList.add('hidden');
-      document.getElementById('enroll-retake-btn').classList.add('hidden');
-      // Auto-fill verify ID
-      document.getElementById('verify-id').value = studentId;
+      // Go directly to exam monitoring (verification happens automatically every 1 min)
+      const params = new URLSearchParams();
+      params.set('student_id', studentId);
+      params.set('student_name', studentName);
+      setTimeout(() => {
+        window.location.href = '/monitoring/exam?' + params.toString();
+      }, 800);
     } else {
       showToast(data.message || data.detail || 'Enrollment failed', 'error');
     }
@@ -1595,11 +1597,14 @@ function displayResult(data) {
 
   // Token section
   const tokenSec = document.getElementById('token-section');
+  const examSec = document.getElementById('exam-section');
   if (data.status === 'approved' && data.token) {
     tokenSec.classList.remove('hidden');
+    examSec.classList.remove('hidden');
     document.getElementById('token-box').textContent = data.token;
   } else {
     tokenSec.classList.add('hidden');
+    examSec.classList.add('hidden');
   }
 
   // Trace
@@ -1658,6 +1663,20 @@ async function validateToken() {
     btn.textContent = 'Validate Token';
     sp.classList.add('hidden');
   }
+}
+
+/* ═══════════════════════════════════════════════
+   START EXAM SESSION
+═══════════════════════════════════════════════ */
+function startExamSession() {
+  const studentId = currentStudentId || document.getElementById('verify-id').value.trim();
+  const studentName = document.getElementById('enroll-name') ? document.getElementById('enroll-name').value.trim() : '';
+  const token = currentToken || '';
+  const params = new URLSearchParams();
+  if (studentId) params.set('student_id', studentId);
+  if (studentName) params.set('student_name', studentName);
+  if (token) params.set('token', token);
+  window.location.href = '/monitoring/exam?' + params.toString();
 }
 
 /* ═══════════════════════════════════════════════

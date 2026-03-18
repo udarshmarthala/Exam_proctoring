@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import router
 from app.core.config import settings
+from monitoring.routes import router as monitoring_router
 
 logging.basicConfig(
     level=logging.DEBUG if settings.DEBUG else logging.INFO,
@@ -46,7 +47,10 @@ app.add_middleware(
 # API routes
 app.include_router(router, prefix="/api/v1")
 
-# Serve static frontend
+# Monitoring routes (webcam, gaze tracking, behavior analysis, WebSocket)
+app.include_router(monitoring_router)
+
+# Serve static frontend (must be last — catch-all mount)
 static_dir = Path(__file__).parent.parent / "static"
 if static_dir.exists():
     app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="static")
@@ -61,4 +65,5 @@ async def startup_event():
     logger.info("  AI Exam Proctoring System — Identity Verification")
     logger.info("  Server : http://%s:%s", settings.HOST, settings.PORT)
     logger.info("  API    : http://%s:%s/api/docs", settings.HOST, settings.PORT)
+    logger.info("  Exam   : http://%s:%s/monitoring/exam", settings.HOST, settings.PORT)
     logger.info("=" * 60)

@@ -17,6 +17,7 @@ class ProctoringEventType(str, Enum):
     multiple_people_talking = "multiple_people_talking"
     possible_phone = "possible_phone"
     talking_detected = "talking_detected"
+    document_face_mismatch = "document_face_mismatch"
     # Mouse
     mouse_leave_window = "mouse_leave_window"
     mouse_erratic = "mouse_erratic"
@@ -59,6 +60,7 @@ class BehaviorFlag(str, Enum):
     PASTE_USED = "paste_used"
     KEYBOARD_INACTIVE = "keyboard_inactive"
     TALKING = "talking"
+    DOCUMENT_MISMATCH = "document_mismatch"
 
 
 class EventSeverity(str, Enum):
@@ -84,7 +86,8 @@ FLAG_SEVERITY: dict[BehaviorFlag, EventSeverity] = {
     BehaviorFlag.COPY_PASTE_SUSPECTED: EventSeverity.WARNING,
     BehaviorFlag.PASTE_USED: EventSeverity.CRITICAL,
     BehaviorFlag.KEYBOARD_INACTIVE: EventSeverity.INFO,
-    BehaviorFlag.TALKING: EventSeverity.WARNING,
+    BehaviorFlag.TALKING: EventSeverity.CRITICAL,
+    BehaviorFlag.DOCUMENT_MISMATCH: EventSeverity.CRITICAL,
 }
 
 # Human-readable messages for audit log
@@ -103,6 +106,7 @@ EVENT_MESSAGES: dict[BehaviorFlag, str] = {
     BehaviorFlag.PASTE_USED: "Paste used (clipboard)",
     BehaviorFlag.KEYBOARD_INACTIVE: "Prolonged keyboard inactivity",
     BehaviorFlag.TALKING: "Lip movement detected — possible talking",
+    BehaviorFlag.DOCUMENT_MISMATCH: "Face does not match uploaded document",
 }
 
 

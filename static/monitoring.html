@@ -1,0 +1,1022 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Monitoring Test — Eye & Behavior Tracking</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #080b0f;
+  color: #c8d8e8;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  display: flex; flex-direction: column; align-items: center;
+  min-height: 100vh; padding: 20px;
+}
+h1 { font-size: 20px; color: #00d4ff; margin-bottom: 16px; letter-spacing: 1px; }
+.container { display: flex; gap: 24px; flex-wrap: wrap; justify-content: center; }
+.video-box {
+  position: relative; border: 2px solid #1e2d3d; border-radius: 12px; overflow: hidden;
+  background: #0e1318;
+}
+video { width: 640px; height: 480px; display: block; transform: scaleX(-1); }
+.overlay {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+  pointer-events: none;
+}
+.panel {
+  background: #111820; border: 1px solid #1e2d3d; border-radius: 12px;
+  padding: 20px; min-width: 300px; max-width: 360px;
+}
+.panel h2 { font-size: 14px; color: #7a9ab5; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 14px; }
+.metric { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #1a2530; }
+.metric-label { color: #7a9ab5; font-size: 13px; }
+.metric-value { font-weight: 600; font-size: 13px; font-family: 'Courier New', monospace; }
+.flag-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.flag {
+  padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+.flag-normal { background: rgba(0,255,136,0.15); color: #00ff88; border: 1px solid rgba(0,255,136,0.3); }
+.flag-warning { background: rgba(255,61,90,0.15); color: #ff3d5a; border: 1px solid rgba(255,61,90,0.3); }
+.status-dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  margin-right: 6px; vertical-align: middle;
+}
+.dot-green { background: #00ff88; box-shadow: 0 0 6px rgba(0,255,136,0.5); }
+.dot-red { background: #ff3d5a; box-shadow: 0 0 6px rgba(255,61,90,0.5); }
+.dot-amber { background: #ffaa00; box-shadow: 0 0 6px rgba(255,170,0,0.5); }
+.main { display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap; justify-content: center; max-width: 1400px; }
+.event-sidebar {
+  background: #0e1318; border: 1px solid #1e2d3d; border-radius: 12px;
+  padding: 16px; min-width: 300px; max-width: 320px; max-height: 70vh; overflow: hidden; display: flex; flex-direction: column;
+}
+.event-sidebar h2 {
+  font-size: 12px; color: #7a9ab5; text-transform: uppercase; letter-spacing: 1px;
+  margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid #1a2530;
+}
+#event-log {
+  flex: 1; overflow-y: auto; font-family: 'Courier New', monospace; font-size: 11px;
+}
+#event-log .event { padding: 8px 10px; margin-bottom: 6px; border-radius: 8px; border-left: 3px solid; }
+#event-log .event.critical { background: rgba(255,61,90,0.12); border-color: #ff3d5a; color: #ff8a9e; }
+#event-log .event.warning { background: rgba(255,170,0,0.12); border-color: #ffaa00; color: #ffc952; }
+#event-log .event.resolved { background: rgba(0,255,136,0.08); border-color: #00ff88; color: #7dd4a8; }
+#event-log .event .event-time { opacity: 0.85; font-size: 10px; margin-bottom: 2px; }
+#event-log .event .event-msg { font-weight: 500; }
+#event-log .event .event-badge { font-size: 9px; text-transform: uppercase; margin-top: 4px; opacity: 0.9; }
+#log {
+  margin-top: 16px; background: #0a0e13; border: 1px solid #1e2d3d; border-radius: 8px;
+  padding: 12px; font-family: 'Courier New', monospace; font-size: 11px;
+  max-height: 120px; overflow-y: auto; color: #7a9ab5; width: 100%; max-width: 1000px;
+}
+#log div { padding: 2px 0; }
+.log-flag { color: #ff3d5a; }
+.log-ok { color: #00ff88; }
+.btn {
+  margin-top: 16px; padding: 10px 28px; border: 1px solid #00d4ff; background: transparent;
+  color: #00d4ff; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600;
+  transition: 0.2s;
+}
+.btn:hover { background: rgba(0,212,255,0.1); }
+.btn.active { background: #00d4ff; color: #080b0f; }
+/* L1 banner */
+.l1-banner {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 40;
+  background: rgba(255,170,0,0.95); color: #1a1a1a; padding: 10px 20px; text-align: center;
+  font-weight: 600; font-size: 14px; box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+}
+/* L2 modal */
+.l2-modal {
+  position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,0.6);
+  display: none; align-items: center; justify-content: center;
+}
+.l2-modal.show { display: flex; }
+.l2-box {
+  background: #1a1a1a; border: 2px solid #ffaa00; border-radius: 12px; padding: 24px; max-width: 400px; text-align: center;
+}
+.l2-box h3 { color: #ffaa00; margin-bottom: 12px; }
+.l2-box button { margin-top: 16px; padding: 10px 24px; background: #ffaa00; color: #000; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; }
+/* L3 overlay */
+.l3-overlay {
+  position: fixed; inset: 0; z-index: 60; border: 6px solid #ff3d5a; background: rgba(0,0,0,0.5);
+  display: none; align-items: center; justify-content: center;
+}
+.l3-overlay.show { display: flex; }
+.l3-box { background: #2a0a0a; color: #ff8a9e; padding: 32px; border-radius: 12px; text-align: center; max-width: 420px; }
+.l3-box h2 { color: #ff3d5a; margin-bottom: 12px; }
+.l3-box button { margin-top: 20px; padding: 12px 28px; background: #ff3d5a; color: #fff; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; }
+/* Student layout: exam area + webcam corner */
+.student-layout { display: flex; gap: 24px; flex: 1; max-width: 1200px; width: 100%; }
+.exam-area { flex: 1; background: #111820; border: 1px solid #1e2d3d; border-radius: 12px; padding: 24px; }
+.exam-area h2 { font-size: 12px; color: #7a9ab5; margin-bottom: 16px; }
+.webcam-corner { position: relative; width: 240px; flex-shrink: 0; }
+.webcam-corner video { width: 100%; border-radius: 8px; border: 2px solid #1e2d3d; transform: scaleX(-1); }
+.timer { font-family: 'Courier New', monospace; font-size: 18px; color: #00d4ff; margin-bottom: 12px; }
+/* Proctor panel */
+.proctor-panel { min-width: 320px; max-width: 360px; display: flex; flex-direction: column; background: #0e1318; border: 1px solid #1e2d3d; border-radius: 12px; overflow: hidden; max-height: 85vh; }
+.proctor-panel h2 { font-size: 12px; color: #7a9ab5; padding: 12px; border-bottom: 1px solid #1a2530; }
+.proctor-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 12px; font-size: 11px; }
+.proctor-stats span { color: #7a9ab5; }
+.proctor-stats .val { color: #c8d8e8; font-weight: 600; }
+.risk-low { color: #00ff88; }
+.risk-med { color: #ffaa00; }
+.risk-high { color: #ff3d5a; }
+#proctor-events { flex: 1; overflow-y: auto; padding: 8px; }
+.proctor-event { padding: 10px; margin-bottom: 8px; border-radius: 8px; border-left: 4px solid; font-size: 11px; }
+.proctor-event.sev1 { background: rgba(255,170,0,0.1); border-color: #ffaa00; }
+.proctor-event.sev2 { background: rgba(255,140,0,0.15); border-color: #ff8c00; }
+.proctor-event.sev3 { background: rgba(255,61,90,0.15); border-color: #ff3d5a; }
+.proctor-event img { max-width: 100%; height: auto; border-radius: 4px; margin-top: 6px; max-height: 80px; object-fit: cover; }
+.export-btn { margin: 12px; padding: 10px; background: #1e2d3d; color: #00d4ff; border: 1px solid #00d4ff; border-radius: 8px; cursor: pointer; font-weight: 600; }
+.export-btn:hover { background: rgba(0,212,255,0.1); }
+/* Mouse & keyboard logs */
+.input-logs-panel { background: #0e1318; border: 1px solid #1e2d3d; border-radius: 12px; padding: 16px; min-width: 280px; max-width: 320px; max-height: 85vh; display: flex; flex-direction: column; }
+.input-logs-panel h2 { font-size: 12px; color: #7a9ab5; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid #1a2530; }
+.input-log-list { font-family: 'Courier New', monospace; font-size: 11px; overflow-y: auto; flex: 1; min-height: 120px; max-height: 200px; }
+.input-log-list .entry { padding: 4px 8px; margin-bottom: 2px; border-radius: 4px; background: #0a0e13; color: #8a9aaa; border-left: 3px solid #1e2d3d; }
+.input-log-list .entry.mouse-move { border-left-color: #00d4ff; }
+.input-log-list .entry.mouse-click { border-left-color: #00ff88; }
+.input-log-list .entry.mouse-leave { border-left-color: #ffaa00; }
+.input-log-list .entry.key-down { border-left-color: #7a9ab5; }
+.input-log-list .entry.key-up { border-left-color: #5a7a95; }
+.input-log-list .entry .time { opacity: 0.8; font-size: 10px; margin-right: 8px; }
+.input-log-list.empty { color: #5a7a95; padding: 8px; }
+</style>
+</head>
+<body>
+<div id="l1-banner" class="l1-banner" style="display:none;">⚠️ Please look at your screen</div>
+<div id="l2-modal" class="l2-modal"><div class="l2-box"><h3>⚠️ Proctoring Alert</h3><p id="l2-message">Please look at your screen.</p><button onclick="dismissL2()">I understand — continue exam</button></div></div>
+<div id="l3-overlay" class="l3-overlay"><div class="l3-box"><h2>🚨 Critical — Proctor Notified</h2><p id="l3-message">A critical event has been recorded.</p><button onclick="dismissL3()">Acknowledge</button></div></div>
+
+<h1>Exam Proctoring — Real-time Monitoring</h1>
+<div class="main">
+<div class="student-layout">
+  <div class="exam-area">
+    <div class="timer">Time: <span id="exam-timer">45:00</span></div>
+    <h2>Exam content</h2>
+    <p style="color:#7a9ab5;">[Placeholder] Question 1: Answer the following. Keep your face visible and look at the screen.</p>
+  </div>
+  <div class="webcam-corner" style="position:relative;">
+    <video id="video" autoplay playsinline muted style="width:100%; max-width:240px;"></video>
+    <canvas id="overlay" class="overlay" width="640" height="480" style="position:absolute; top:0; left:0; width:100%; max-width:240px; height:auto; pointer-events:none;"></canvas>
+    <p style="margin-top:8px; font-size:11px; color:#7a9ab5;"><span id="status-dot" class="status-dot dot-green"></span> <span id="status-text">Tracking off</span></p>
+    <div style="margin-top:8px;">
+      <p style="font-size:11px; color:#00d4ff; margin-bottom:4px;">Candidate (required to start exam)</p>
+      <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+        <input id="monitor-student-id" placeholder="Student ID" style="padding:8px; border-radius:6px; border:1px solid #1e2d3d; background:#0e1318; color:#c8d8e8; min-width:120px;" />
+        <input id="monitor-student-name" placeholder="Student name" style="padding:8px; border-radius:6px; border:1px solid #1e2d3d; background:#0e1318; color:#c8d8e8; min-width:140px;" />
+        <button type="button" class="btn" onclick="loadEnrolledStudents()" style="font-size:11px; padding:6px 10px;">Load enrolled</button>
+      </div>
+      <select id="enrolled-select" style="display:none; margin-top:6px; padding:6px; border-radius:6px; border:1px solid #1e2d3d; background:#0e1318; color:#c8d8e8; width:100%; max-width:280px;"></select>
+      <p id="candidate-label" style="display:none; margin-top:6px; font-size:12px; color:#00ff88; font-weight:600;"></p>
+      <div style="display:flex; gap:6px; align-items:center; margin-top:6px;">
+        <input id="reverify-interval" type="number" min="1" value="1" style="width:52px; padding:6px; border-radius:6px; border:1px solid #1e2d3d; background:#0e1318; color:#c8d8e8;" />
+        <span style="color:#7a9ab5; font-size:11px;">min face check</span>
+      </div>
+      <div style="display:flex; gap:6px; align-items:center; margin-top:4px;">
+        <input id="exam-duration" type="number" min="1" value="45" style="width:52px; padding:6px; border-radius:6px; border:1px solid #1e2d3d; background:#0e1318; color:#c8d8e8;" />
+        <span style="color:#7a9ab5; font-size:11px;">min exam duration</span>
+      </div>
+    </div>
+    <!-- Document Upload for Face Verification -->
+    <div style="margin-top:10px; padding:10px; border:1px solid #1e2d3d; border-radius:8px; background:#0a1018;">
+      <p style="margin:0 0 6px 0; font-size:12px; color:#00d4ff; font-weight:600;">ID Document Verification</p>
+      <p style="margin:0 0 6px 0; font-size:10px; color:#7a9ab5;">Upload your ID document. Your face will be matched against it every 1 minute.</p>
+      <input type="file" id="doc-upload" accept="image/*" style="display:none;" />
+      <div style="display:flex; gap:6px; align-items:center;">
+        <button class="btn" onclick="document.getElementById('doc-upload').click()" style="font-size:11px; padding:6px 10px;">Upload ID</button>
+        <button class="btn" onclick="captureDocFromWebcam()" style="font-size:11px; padding:6px 10px;">Capture ID</button>
+        <span id="doc-status" style="font-size:11px; color:#7a9ab5;">No document uploaded</span>
+      </div>
+      <p id="doc-preview-label" style="display:none; margin:8px 0 4px 0; font-size:11px; color:#00d4ff; font-weight:600;">Uploaded document</p>
+      <img id="doc-preview" alt="Uploaded ID document" style="display:none; margin-top:4px; max-width:100%; width:200px; max-height:180px; object-fit:contain; border-radius:8px; border:2px solid #1e2d3d; background:#0a0e13;" />
+    </div>
+    <button class="btn" id="startBtn" onclick="toggleStream()" style="margin-top:8px;">Start exam & camera</button>
+    <button class="btn" id="endExamBtn" onclick="endExam()" style="margin-top:6px; display:none; border-color:#ffaa00; color:#ffaa00;">End exam & save log</button>
+  </div>
+</div>
+<div class="main">
+<div class="container">
+  <div class="panel">
+    <h2>Live Metrics</h2>
+    <div class="metric">
+      <span class="metric-label">Gaze Direction</span>
+      <span class="metric-value" id="m-gaze">—</span>
+    </div>
+    <div class="metric">
+      <span class="metric-label">Horizontal Ratio</span>
+      <span class="metric-value" id="m-hratio">—</span>
+    </div>
+    <div class="metric">
+      <span class="metric-label">Vertical Ratio</span>
+      <span class="metric-value" id="m-vratio">—</span>
+    </div>
+    <div class="metric">
+      <span class="metric-label">Head Yaw</span>
+      <span class="metric-value" id="m-yaw">—</span>
+    </div>
+    <div class="metric">
+      <span class="metric-label">Head Pitch</span>
+      <span class="metric-value" id="m-pitch">—</span>
+    </div>
+    <div class="metric">
+      <span class="metric-label">Head Roll</span>
+      <span class="metric-value" id="m-roll">—</span>
+    </div>
+    <div class="metric">
+      <span class="metric-label">Faces Detected</span>
+      <span class="metric-value" id="m-faces">—</span>
+    </div>
+    <div class="metric">
+      <span class="metric-label">Lip Movement</span>
+      <span class="metric-value" id="m-talking">—</span>
+    </div>
+    <div class="metric">
+      <span class="metric-label">Mouth Open Ratio</span>
+      <span class="metric-value" id="m-mouth">—</span>
+    </div>
+    <div class="metric">
+      <span class="metric-label">Voice (Mic)</span>
+      <span class="metric-value" id="m-voice">—</span>
+    </div>
+    <div class="metric">
+      <span class="metric-label">Audio Level</span>
+      <span class="metric-value" id="m-audio">—</span>
+    </div>
+    <div class="metric">
+      <span class="metric-label">Doc Verification</span>
+      <span class="metric-value" id="m-docverify">—</span>
+    </div>
+    <h2 style="margin-top:18px;">Active Flags</h2>
+    <div class="flag-list" id="flags">
+      <span class="flag flag-normal">WAITING</span>
+    </div>
+    <p style="margin-top:12px; font-size:11px; color:#5a7a95;">Mouse &amp; keyboard monitored (movement, leave window, shortcuts, typing pauses)</p>
+  </div>
+  <div class="event-sidebar">
+    <h2>Audit trail</h2>
+    <div id="event-log"></div>
+  </div>
+  <div class="proctor-panel">
+    <h2>Proctor dashboard</h2>
+    <div class="proctor-stats">
+      <span>L1 warnings</span><span class="val" id="stat-l1">0</span>
+      <span>L2 alerts</span><span class="val" id="stat-l2">0</span>
+      <span>L3 critical</span><span class="val" id="stat-l3">0</span>
+      <span>Risk</span><span class="val" id="stat-risk">Low</span>
+    </div>
+    <div id="proctor-events"></div>
+    <button class="export-btn" onclick="exportLog()">Export log (JSON)</button>
+  </div>
+  <div class="input-logs-panel">
+    <h2>Mouse log</h2>
+    <div id="mouse-log" class="input-log-list empty">No mouse activity yet. Move and click to see entries.</div>
+    <h2 style="margin-top:14px;">Keyboard log</h2>
+    <div id="keyboard-log" class="input-log-list empty">No key activity yet. Type to see entries.</div>
+  </div>
+</div>
+<div id="log"></div>
+
+<script>
+const video = document.getElementById('video');
+const canvas = document.getElementById('overlay');
+const ctx = canvas.getContext('2d');
+let ws = null;
+let streaming = false;
+let sendInterval = null;
+let audioCtx = null;
+let audioAnalyser = null;
+let audioDataArray = null;
+let proctoringEvents = [];
+let timerStarted = false;
+let l1DismissTimer = null;
+// Periodic re-verification (client-side): every N minutes capture a probe image and POST to identity API
+let reverifyIntervalId = null;
+let reverifyFailures = 0;
+const REVERIFY_API = '/api/v1/verify';
+// Mouse/keyboard batches sent with each frame
+let mouseMovements = [];
+let mouseClicks = [];
+let keyEvents = [];
+let lastMouseSnapshot = null;
+let mouseMoveThrottle = null;
+let pendingMove = null;
+const MOUSE_THROTTLE_MS = 50;
+const MAX_MOUSE_LOG = 80;
+const MAX_KEYBOARD_LOG = 80;
+let mouseLog = [];
+let keyboardLog = [];
+let pasteOccurred = false;
+let documentUploaded = false;
+let eventLogForExport = [];
+
+// ── Document upload handlers ──────────────────────────────────────────
+function loadDocumentPreview(studentId) {
+  if (!studentId) return;
+  const img = document.getElementById('doc-preview');
+  const label = document.getElementById('doc-preview-label');
+  img.onerror = function() { img.style.display = 'none'; label.style.display = 'none'; };
+  img.onload = function() { img.style.display = 'block'; label.style.display = 'block'; };
+  img.src = '/monitoring/document-preview?student_id=' + encodeURIComponent(studentId) + '&t=' + Date.now();
+}
+document.getElementById('monitor-student-id').addEventListener('blur', function() {
+  const sid = (this.value || '').trim();
+  if (sid) loadDocumentPreview(sid);
+});
+document.getElementById('doc-upload').addEventListener('change', async function(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const studentIdInput = document.getElementById('monitor-student-id');
+  let studentId = (studentIdInput && studentIdInput.value || '').trim();
+  if (!studentId) studentId = 'student';
+  const form = new FormData();
+  form.append('student_id', studentId);
+  form.append('document', file);
+  document.getElementById('doc-status').textContent = 'Uploading...';
+  document.getElementById('doc-status').style.color = '#ffc107';
+  try {
+    const res = await fetch('/monitoring/upload-document', { method: 'POST', body: form });
+    const json = await res.json();
+    if (json.success) {
+      document.getElementById('doc-status').textContent = 'Document verified';
+      document.getElementById('doc-status').style.color = '#00ff88';
+      documentUploaded = true;
+      if (studentIdInput && !studentIdInput.value.trim()) studentIdInput.value = studentId;
+      // Show the image saved on the server (so user sees exactly what was stored)
+      const img = document.getElementById('doc-preview');
+      const label = document.getElementById('doc-preview-label');
+      img.src = '/monitoring/document-preview?student_id=' + encodeURIComponent(studentId) + '&t=' + Date.now();
+      img.style.display = 'block';
+      label.style.display = 'block';
+      img.onerror = function() { img.style.display = 'none'; label.style.display = 'none'; };
+      addLog('ID document uploaded for ' + studentId, false);
+    } else {
+      document.getElementById('doc-status').textContent = json.message || 'Upload failed';
+      document.getElementById('doc-status').style.color = '#ff3d5a';
+    }
+  } catch (err) {
+    document.getElementById('doc-status').textContent = 'Upload error: ' + err.message;
+    document.getElementById('doc-status').style.color = '#ff3d5a';
+  }
+});
+
+async function captureDocFromWebcam() {
+  const studentIdInput = document.getElementById('monitor-student-id');
+  let studentId = (studentIdInput && studentIdInput.value || '').trim();
+  if (!studentId) studentId = 'student';
+  // Use the existing video element if streaming, otherwise request camera briefly
+  let videoEl = document.getElementById('video');
+  let tempStream = null;
+  if (!videoEl.srcObject) {
+    try {
+      tempStream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' } });
+      videoEl.srcObject = tempStream;
+      await videoEl.play();
+      // Wait for camera to warm up
+      await new Promise(r => setTimeout(r, 1500));
+    } catch (err) {
+      alert('Camera access needed to capture document: ' + err.message);
+      return;
+    }
+  }
+  document.getElementById('doc-status').textContent = 'Capturing...';
+  document.getElementById('doc-status').style.color = '#ffc107';
+  const c = document.createElement('canvas');
+  c.width = 640; c.height = 480;
+  c.getContext('2d').drawImage(videoEl, 0, 0, 640, 480);
+  const dataUrl = c.toDataURL('image/jpeg', 0.9);
+  const b64 = dataUrl.split(',')[1];
+  // Clean up temp stream if we created one
+  if (tempStream) {
+    tempStream.getTracks().forEach(t => t.stop());
+    videoEl.srcObject = null;
+  }
+  try {
+    const res = await fetch('/upload-document-base64', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ student_id: studentId, image: b64 }),
+    });
+    const json = await res.json();
+    if (json.success) {
+      document.getElementById('doc-status').textContent = 'Document captured & verified';
+      document.getElementById('doc-status').style.color = '#00ff88';
+      documentUploaded = true;
+      if (studentIdInput && !studentIdInput.value.trim()) studentIdInput.value = studentId;
+      const img = document.getElementById('doc-preview');
+      const label = document.getElementById('doc-preview-label');
+      img.src = '/monitoring/document-preview?student_id=' + encodeURIComponent(studentId) + '&t=' + Date.now();
+      img.style.display = 'block';
+      label.style.display = 'block';
+      img.onerror = function() { img.style.display = 'none'; label.style.display = 'none'; };
+      addLog('ID document captured for ' + studentId, false);
+    } else {
+      document.getElementById('doc-status').textContent = json.message || 'Capture failed';
+      document.getElementById('doc-status').style.color = '#ff3d5a';
+    }
+  } catch (err) {
+    document.getElementById('doc-status').textContent = 'Error: ' + err.message;
+    document.getElementById('doc-status').style.color = '#ff3d5a';
+  }
+}
+function getAudioLevel() {
+  if (!audioAnalyser || !audioDataArray) return 0;
+  // Resume AudioContext if suspended (browsers require user gesture)
+  if (audioCtx && audioCtx.state === 'suspended') { audioCtx.resume(); }
+  audioAnalyser.getByteTimeDomainData(audioDataArray);
+  let sum = 0;
+  for (let i = 0; i < audioDataArray.length; i++) {
+    const v = (audioDataArray[i] - 128) / 128.0;
+    sum += v * v;
+  }
+  return Math.sqrt(sum / audioDataArray.length);  // RMS 0.0-1.0
+}
+
+function handleAlerts(alerts) {
+  alerts.forEach(a => {
+    if (a.level === 1) {
+      document.getElementById('l1-banner').style.display = 'block';
+      document.getElementById('l1-banner').textContent = '⚠️ ' + (a.message || 'Please look at your screen');
+      if (l1DismissTimer) clearTimeout(l1DismissTimer);
+      l1DismissTimer = setTimeout(() => { document.getElementById('l1-banner').style.display = 'none'; }, 4000);
+    } else if (a.level === 2) {
+      document.getElementById('l2-message').textContent = a.message || 'Please look at your screen.';
+      document.getElementById('l2-modal').classList.add('show');
+    } else if (a.level === 3) {
+      document.getElementById('l3-message').textContent = a.message || 'A critical event has been recorded. Proctor notified.';
+      document.getElementById('l3-overlay').classList.add('show');
+    }
+  });
+}
+function dismissL2() { document.getElementById('l2-modal').classList.remove('show'); }
+function dismissL3() { document.getElementById('l3-overlay').classList.remove('show'); }
+
+function updateStatus(d) {
+  const dot = document.getElementById('status-dot');
+  const text = document.getElementById('status-text');
+  if (!streaming) { dot.className = 'status-dot dot-amber'; text.textContent = 'Tracking off'; return; }
+  const fc = d.face_count || 0;
+  const lowLight = d.low_light;
+  const conf = d.confidence || 0;
+  if (fc === 0) { dot.className = 'status-dot dot-red'; text.textContent = 'No face'; return; }
+  if (lowLight || conf < 0.85) { dot.className = 'status-dot dot-amber'; text.textContent = 'Degraded'; return; }
+  dot.className = 'status-dot dot-green'; text.textContent = 'Tracking active';
+}
+
+let sessionStudentId = '';
+let sessionStudentName = '';
+let sessionStartTime = null;
+
+function startExamTimer(sessionStart) {
+  timerStarted = true;
+  sessionStartTime = sessionStart;
+  const mins = parseInt((document.getElementById('exam-duration') || {}).value || '45', 10) || 45;
+  const totalSec = mins * 60;
+  function tick() {
+    const elapsed = Math.floor(Date.now() / 1000 - sessionStart);
+    const left = Math.max(0, totalSec - elapsed);
+    const m = Math.floor(left / 60);
+    const s = left % 60;
+    document.getElementById('exam-timer').textContent = m + ':' + (s < 10 ? '0' : '') + s;
+    if (left === 0 && streaming) {
+      addLog('Exam time ended. Click "End exam & save log" to save and finish.', true);
+    }
+    if (streaming) requestAnimationFrame(tick);
+  }
+  tick();
+}
+
+function refreshProctorPanel(events) {
+  const el = document.getElementById('proctor-events');
+  el.innerHTML = '';
+  (events || []).slice().reverse().forEach(ev => {
+    const div = document.createElement('div');
+    div.className = 'proctor-event sev' + ev.severity;
+    let html = '<div><strong>' + (ev.timestamp ? new Date(ev.timestamp).toLocaleTimeString() : '') + '</strong> L' + ev.severity + ' · ' + (ev.event_type || '').replace(/_/g, ' ') + '</div><div style="color:#7a9ab5; margin-top:4px;">' + (ev.message || '') + '</div>';
+    if (ev.screenshot_ref) html += '<img src="data:image/jpeg;base64,' + ev.screenshot_ref + '" alt="" />';
+    div.innerHTML = html;
+    el.appendChild(div);
+  });
+  const l1 = (events || []).filter(e => e.severity === 1).length;
+  const l2 = (events || []).filter(e => e.severity === 2).length;
+  const l3 = (events || []).filter(e => e.severity === 3).length;
+  document.getElementById('stat-l1').textContent = l1;
+  document.getElementById('stat-l2').textContent = l2;
+  document.getElementById('stat-l3').textContent = l3;
+  let risk = 'Low';
+  if (l3 > 0 || l2 >= 2) risk = 'High';
+  else if (l2 >= 1 || l1 >= 3) risk = 'Medium';
+  const riskEl = document.getElementById('stat-risk');
+  riskEl.textContent = risk;
+  riskEl.className = 'val risk-' + risk.toLowerCase();
+}
+
+function exportLog() {
+  const meta = {
+    student_id: sessionStudentId || (document.getElementById('monitor-student-id') || {}).value || 'unknown',
+    student_name: sessionStudentName || (document.getElementById('monitor-student-name') || {}).value || '',
+    session_start: sessionStartTime ? new Date(sessionStartTime * 1000).toISOString() : null,
+    session_end: new Date().toISOString(),
+    event_count: proctoringEvents.length,
+  };
+  const data = JSON.stringify({ meta, proctoring_events: proctoringEvents, event_log: eventLogForExport || [] }, null, 2);
+  const blob = new Blob([data], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  const safeName = (meta.student_name || meta.student_id).replace(/[^a-zA-Z0-9-_]/g, '_').slice(0, 40);
+  a.download = 'proctoring_' + meta.student_id + '_' + safeName + '_' + new Date().toISOString().slice(0, 19).replace(/:/g, '-') + '.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function endExam() {
+  stopReverifyTimer();
+  if (streaming) stopStream();
+  document.getElementById('startBtn').textContent = 'Start exam & camera';
+  document.getElementById('startBtn').classList.remove('active');
+  const endBtn = document.getElementById('endExamBtn');
+  if (endBtn) endBtn.style.display = 'none';
+  timerStarted = false;
+  exportLog();
+  addLog('Exam ended. Log saved under ' + (sessionStudentName || sessionStudentId) + ' (' + sessionStudentId + ')', false);
+}
+
+async function loadEnrolledStudents() {
+  try {
+    const res = await fetch('/api/v1/students');
+    const json = await res.json();
+    const list = json.enrolled_students || [];
+    const sel = document.getElementById('enrolled-select');
+    const idIn = document.getElementById('monitor-student-id');
+    const nameIn = document.getElementById('monitor-student-name');
+    sel.innerHTML = '<option value="">-- Select enrolled student --</option>';
+    list.forEach(function(s) {
+      const opt = document.createElement('option');
+      opt.value = s.id;
+      opt.textContent = (s.name || s.id) + ' (' + s.id + ')';
+      opt.dataset.name = s.name || s.id;
+      sel.appendChild(opt);
+    });
+    sel.style.display = list.length ? 'block' : 'none';
+    sel.onchange = function() {
+      const o = sel.options[sel.selectedIndex];
+      if (o && o.value) { idIn.value = o.value; nameIn.value = o.dataset.name || o.value; }
+    };
+  } catch (e) {
+    addLog('Could not load enrolled students: ' + e.message, true);
+  }
+}
+
+async function toggleStream() {
+  const btn = document.getElementById('startBtn');
+  if (streaming) {
+    stopStream();
+    btn.textContent = 'Start exam & camera';
+    btn.classList.remove('active');
+    document.getElementById('endExamBtn').style.display = 'none';
+    return;
+  }
+  const sid = (document.getElementById('monitor-student-id') || {}).value || '';
+  if (!sid.trim()) {
+    addLog('Enter or select a Student ID to start the exam (candidate must be enrolled first).', true);
+    return;
+  }
+  try {
+  const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' }, audio: true });
+    video.srcObject = stream;
+    await video.play();
+    // Set up audio analysis for voice activity detection
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') await audioCtx.resume();
+      const source = audioCtx.createMediaStreamSource(stream);
+      audioAnalyser = audioCtx.createAnalyser();
+      audioAnalyser.fftSize = 512;
+      audioAnalyser.smoothingTimeConstant = 0.3;
+      source.connect(audioAnalyser);
+      audioDataArray = new Uint8Array(audioAnalyser.fftSize);
+      addLog('Microphone enabled for voice detection', false);
+    } catch (ae) {
+      addLog('Audio init error (voice detection disabled): ' + ae.message, true);
+      audioCtx = null; audioAnalyser = null; audioDataArray = null;
+    }
+    btn.textContent = 'Stop Monitoring';
+    btn.classList.add('active');
+    streaming = true;
+    connectWS();
+  } catch (e) {
+    addLog('Camera/mic error: ' + e.message, true);
+  }
+}
+
+function stopStream() {
+  streaming = false;
+  document.getElementById('endExamBtn').style.display = 'none';
+  if (sendInterval) { clearInterval(sendInterval); sendInterval = null; }
+  stopReverifyTimer();
+  if (ws) { ws.close(); ws = null; }
+  const stream = video.srcObject;
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  video.srcObject = null;
+  ctx.clearRect(0, 0, 640, 480);
+  if (audioCtx) { try { audioCtx.close(); } catch(e){} audioCtx = null; audioAnalyser = null; audioDataArray = null; }
+}
+
+function connectWS() {
+  ws = new WebSocket('ws://' + location.host + '/monitoring/ws/monitor');
+  ws.onopen = () => {
+    addLog('Connected to monitoring server', false);
+    // Send frames at ~5 fps
+    sendInterval = setInterval(sendFrame, 200);
+    // Start periodic re-verification if configured
+    startReverifyTimerFromInputs();
+  };
+  ws.onmessage = (e) => {
+    const data = JSON.parse(e.data);
+    if (data.error) {
+      addLog(data.error + (data.detail ? ': ' + data.detail : ''), true);
+      if (data.hint) addLog(data.hint, false);
+      return;
+    }
+    updateMetrics(data);
+    drawOverlay(data);
+    appendNewEvents(data.new_events);
+    refreshEventLog(data.event_log);
+    if (data.alerts && data.alerts.length) handleAlerts(data.alerts);
+    if (data.proctoring_events) { proctoringEvents = data.proctoring_events; refreshProctorPanel(data.proctoring_events); }
+    if (data.session_start && !timerStarted) startExamTimer(data.session_start);
+    if (data.session_student_id) { sessionStudentId = data.session_student_id; }
+    if (data.session_student_name) { sessionStudentName = data.session_student_name; }
+    if (data.event_log && Array.isArray(data.event_log)) eventLogForExport = data.event_log;
+    const cl = document.getElementById('candidate-label');
+    if (cl && (sessionStudentId || sessionStudentName)) {
+      cl.style.display = 'block';
+      cl.textContent = 'Logged as: ' + (sessionStudentName || sessionStudentId) + ' (' + (sessionStudentId || '') + ')';
+    }
+    if (streaming && sessionStudentId && !reverifyIntervalId) {
+      const mins = parseInt((document.getElementById('reverify-interval') || {}).value || '1', 10) || 1;
+      startReverifyTimer(sessionStudentId, mins);
+    }
+    const endBtn = document.getElementById('endExamBtn');
+    if (endBtn && streaming) endBtn.style.display = 'inline-block';
+    updateStatus(data);
+  };
+  ws.onclose = () => { addLog('WebSocket closed', true); };
+  ws.onerror = () => { addLog('WebSocket error', true); };
+}
+
+function sendFrame() {
+  if (!ws || ws.readyState !== WebSocket.OPEN || !streaming) return;
+  const c = document.createElement('canvas');
+  c.width = 640; c.height = 480;
+  c.getContext('2d').drawImage(video, 0, 0, 640, 480);
+  const dataUrl = c.toDataURL('image/jpeg', 0.7);
+  const base64 = dataUrl.split(',')[1];
+  // Append to display logs before clearing
+  const now = Date.now() / 1000;
+  mouseMovements.forEach(function(m) {
+    mouseLog.push({ t: m.t, type: 'move', x: m.x, y: m.y, inside: m.inside });
+  });
+  mouseClicks.forEach(function(c) {
+    mouseLog.push({ t: c.t, type: 'click', button: c.button, x: c.x, y: c.y });
+  });
+  if (lastMouseSnapshot && lastMouseSnapshot.inside_window === false) {
+    if (!mouseLog.length || mouseLog[mouseLog.length - 1].type !== 'leave') {
+      mouseLog.push({ t: lastMouseSnapshot.timestamp, type: 'leave' });
+    }
+  }
+  keyEvents.forEach(function(k) {
+    keyboardLog.push({ t: k.timestamp, key: k.key, code: k.code, keydown: k.keydown, mods: [k.ctrl && 'Ctrl', k.alt && 'Alt', k.meta && 'Meta', k.shift && 'Shift'].filter(Boolean).join('+') });
+  });
+  while (mouseLog.length > MAX_MOUSE_LOG) mouseLog.shift();
+  while (keyboardLog.length > MAX_KEYBOARD_LOG) keyboardLog.shift();
+  refreshInputLogs();
+
+  const sid = (document.getElementById('monitor-student-id') || {}).value || '';
+  const sname = (document.getElementById('monitor-student-name') || {}).value || '';
+  const payload = {
+    frame: base64,
+    mouse: (mouseMovements.length || mouseClicks.length || lastMouseSnapshot) ? {
+      movements: mouseMovements.slice(),
+      clicks: mouseClicks.slice(),
+      last_snapshot: lastMouseSnapshot
+    } : null,
+    keys: keyEvents.length ? keyEvents.slice() : null,
+    paste_event: pasteOccurred,
+    audio_level: getAudioLevel(),
+    student_id: sid || undefined,
+    student_name: sname || undefined,
+  };
+  pasteOccurred = false;
+  ws.send(JSON.stringify(payload));
+  mouseMovements = [];
+  mouseClicks = [];
+  keyEvents = [];
+}
+
+// --- Periodic re-verification functions ---------------------------------
+function startReverifyTimerFromInputs() {
+  const studentId = (document.getElementById('monitor-student-id') || {}).value || '';
+  const mins = parseInt((document.getElementById('reverify-interval') || {}).value || '1', 10);
+  if (!studentId || !mins || mins <= 0) return;
+  startReverifyTimer(studentId, mins);
+}
+
+function startReverifyTimer(studentId, minutes) {
+  stopReverifyTimer();
+  // run immediately then every minutes
+  doReverify(studentId);
+  reverifyIntervalId = setInterval(() => doReverify(studentId), minutes * 60 * 1000);
+  addLog('Started periodic re-verification every ' + minutes + ' min for ' + studentId, false);
+}
+
+function stopReverifyTimer() {
+  if (reverifyIntervalId) { clearInterval(reverifyIntervalId); reverifyIntervalId = null; addLog('Stopped periodic re-verification', false); }
+  reverifyFailures = 0;
+}
+
+function doReverify(studentId) {
+  if (!streaming || !studentId) return;
+  try {
+    const c = document.createElement('canvas');
+    c.width = 640; c.height = 480;
+    c.getContext('2d').drawImage(video, 0, 0, 640, 480);
+    c.toBlob(async function(blob) {
+      if (!blob) return;
+      const form = new FormData();
+      form.append('student_id', studentId);
+      form.append('photo', blob, 'probe.jpg');
+      try {
+        const res = await fetch(REVERIFY_API, { method: 'POST', body: form });
+        const json = await res.json();
+        handleReverifyResult(json);
+      } catch (err) {
+        addLog('Reverify request failed: ' + err.message, true);
+      }
+    }, 'image/jpeg', 0.7);
+  } catch (err) {
+    addLog('Reverify capture failed: ' + err.message, true);
+  }
+}
+
+function handleReverifyResult(json) {
+  if (!json) return;
+  if (json.success) {
+    reverifyFailures = 0;
+    // If we had prior failures, resolve them in the UI
+    if (reverifyFailures > 0) {
+      addLog('Reverify recovered for ' + (json.student_id || '') + ' — identity confirmed', false);
+      handleAlerts([{ level: 1, message: 'Identity re-verified — tracking OK' }]);
+    } else {
+      addLog('Reverify OK (' + json.student_id + ') conf=' + (json.confidence || 0).toFixed(3), false);
+    }
+    return;
+  }
+  reverifyFailures += 1;
+  addLog('Reverify FAILED for ' + (json.student_id || '') + ' · ' + (json.message || 'no message'), true);
+  // Treat any single reverify failure as a potential identity change and show L2 modal
+  if (reverifyFailures === 1) {
+    handleAlerts([{ level: 2, message: 'Identity mismatch detected — please re-align and look at the camera' }]);
+  } else if (reverifyFailures === 2) {
+    handleAlerts([{ level: 2, message: 'Repeated identity mismatch — please re-authenticate' }]);
+  } else {
+    handleAlerts([{ level: 3, message: 'Multiple identity mismatches — proctor alerted' }]);
+  }
+}
+
+function refreshInputLogs() {
+  const mouseEl = document.getElementById('mouse-log');
+  const keyEl = document.getElementById('keyboard-log');
+  if (!mouseEl || !keyEl) return;
+  mouseEl.classList.remove('empty');
+  keyEl.classList.remove('empty');
+  mouseEl.innerHTML = '';
+  keyEl.innerHTML = '';
+  if (mouseLog.length === 0) {
+    mouseEl.classList.add('empty');
+    mouseEl.textContent = 'No mouse activity yet. Move and click to see entries.';
+  } else {
+    mouseLog.slice().reverse().slice(0, 50).forEach(function(entry) {
+      const div = document.createElement('div');
+      const time = new Date(entry.t * 1000).toLocaleTimeString();
+      var msg = '';
+      if (entry.type === 'move') {
+        div.className = 'entry mouse-move';
+        msg = 'move (' + Math.round(entry.x) + ', ' + Math.round(entry.y) + ') ' + (entry.inside ? 'in' : 'out');
+      } else if (entry.type === 'click') {
+        div.className = 'entry mouse-click';
+        var btn = entry.button === 0 ? 'left' : (entry.button === 2 ? 'right' : 'middle');
+        msg = 'click ' + btn + ' (' + Math.round(entry.x) + ', ' + Math.round(entry.y) + ')';
+      } else {
+        div.className = 'entry mouse-leave';
+        msg = 'leave window';
+      }
+      div.innerHTML = '<span class="time">' + time + '</span>' + msg;
+      mouseEl.appendChild(div);
+    });
+  }
+  if (keyboardLog.length === 0) {
+    keyEl.classList.add('empty');
+    keyEl.textContent = 'No key activity yet. Type to see entries.';
+  } else {
+    keyboardLog.slice().reverse().slice(0, 50).forEach(function(entry) {
+      const div = document.createElement('div');
+      const time = new Date(entry.t * 1000).toLocaleTimeString();
+      div.className = 'entry ' + (entry.keydown ? 'key-down' : 'key-up');
+      var keyLabel = entry.code || entry.key || '?';
+      if (entry.mods) keyLabel = entry.mods + (entry.mods && keyLabel ? '+' : '') + keyLabel;
+      div.innerHTML = '<span class="time">' + time + '</span>' + (entry.keydown ? 'keydown' : 'keyup') + ' ' + keyLabel;
+      keyEl.appendChild(div);
+    });
+  }
+}
+
+function recordMouseMove(x, y, inside) {
+  const t = Date.now() / 1000;
+  mouseMovements.push({ t, x, y, inside });
+  lastMouseSnapshot = { timestamp: t, x, y, inside_window: inside, buttons: 0 };
+}
+function recordMouseLeave() {
+  lastMouseSnapshot = lastMouseSnapshot || {};
+  lastMouseSnapshot.inside_window = false;
+  lastMouseSnapshot.timestamp = Date.now() / 1000;
+}
+function recordClick(button, x, y) {
+  mouseClicks.push({ t: Date.now() / 1000, button, x, y });
+}
+function recordKey(ev, keydown) {
+  keyEvents.push({
+    timestamp: Date.now() / 1000,
+    key: ev.key || '',
+    code: ev.code || '',
+    keydown,
+    ctrl: ev.ctrlKey || false,
+    alt: ev.altKey || false,
+    meta: ev.metaKey || false,
+    shift: ev.shiftKey || false
+  });
+}
+
+function setupMouseKeyboardCapture() {
+  document.addEventListener('mousemove', function(ev) {
+    const inside = document.hasFocus() && ev.clientX >= 0 && ev.clientY >= 0 &&
+      ev.clientX <= window.innerWidth && ev.clientY <= window.innerHeight;
+    pendingMove = { x: ev.clientX, y: ev.clientY, inside };
+    if (!mouseMoveThrottle) {
+      mouseMoveThrottle = setTimeout(function() {
+        mouseMoveThrottle = null;
+        if (pendingMove) {
+          recordMouseMove(pendingMove.x, pendingMove.y, pendingMove.inside);
+          pendingMove = null;
+        }
+      }, MOUSE_THROTTLE_MS);
+    }
+  });
+  document.addEventListener('mouseleave', recordMouseLeave);
+  document.addEventListener('mouseout', function(ev) {
+    if (ev.relatedTarget === null) recordMouseLeave();
+  });
+  document.addEventListener('click', function(ev) {
+    recordClick(ev.button || 0, ev.clientX, ev.clientY);
+  });
+  document.addEventListener('keydown', function(ev) { recordKey(ev, true); });
+  document.addEventListener('keyup', function(ev) { recordKey(ev, false); });
+  document.addEventListener('paste', function() { pasteOccurred = true; });
+}
+document.addEventListener('DOMContentLoaded', function() {
+  setupMouseKeyboardCapture();
+  // Auto-populate from query params (unified workflow redirect)
+  const params = new URLSearchParams(window.location.search);
+  const sid = params.get('student_id');
+  const sname = params.get('student_name');
+  if (sid) document.getElementById('monitor-student-id').value = sid;
+  if (sname) document.getElementById('monitor-student-name').value = sname;
+  if (sid) loadDocumentPreview(sid);
+  // Auto-start camera + monitoring if redirected from enrollment
+  if (sid) {
+    setTimeout(function() { toggleStream(); }, 500);
+  }
+});
+
+// audio capture and VAD disabled in this build (reverted)
+
+function updateMetrics(d) {
+  if (d.gaze) {
+    const dirColor = d.gaze.direction === 'center' ? '#00ff88' : '#ffaa00';
+    document.getElementById('m-gaze').innerHTML = '<span style="color:' + dirColor + '">' + d.gaze.direction.toUpperCase() + '</span>';
+    document.getElementById('m-hratio').textContent = d.gaze.horizontal_ratio.toFixed(3);
+    document.getElementById('m-vratio').textContent = d.gaze.vertical_ratio.toFixed(3);
+  } else {
+    document.getElementById('m-gaze').textContent = '—';
+    document.getElementById('m-hratio').textContent = '—';
+    document.getElementById('m-vratio').textContent = '—';
+  }
+  if (d.head_pose) {
+    document.getElementById('m-yaw').textContent = d.head_pose.yaw.toFixed(1) + '°';
+    document.getElementById('m-pitch').textContent = d.head_pose.pitch.toFixed(1) + '°';
+    document.getElementById('m-roll').textContent = d.head_pose.roll.toFixed(1) + '°';
+  }
+  const fc = d.face_count || 0;
+  const fcColor = fc === 1 ? '#00ff88' : (fc === 0 ? '#ff3d5a' : '#ffaa00');
+  document.getElementById('m-faces').innerHTML = '<span style="color:' + fcColor + '">' + fc + '</span>';
+
+  // Lip movement / talking
+  const talking = d.talking || false;
+  const talkColor = talking ? '#ff3d5a' : '#00ff88';
+  const talkLabel = talking ? 'TALKING' : 'SILENT';
+  document.getElementById('m-talking').innerHTML = '<span style="color:' + talkColor + '">' + talkLabel + '</span>';
+  const mar = d.mouth_open_ratio || 0;
+  document.getElementById('m-mouth').textContent = mar.toFixed(4);
+
+  // Voice (microphone)
+  const voiceDetected = d.voice_detected || false;
+  const voiceColor = voiceDetected ? '#ff3d5a' : '#00ff88';
+  const voiceLabel = voiceDetected ? 'SPEAKING' : 'QUIET';
+  document.getElementById('m-voice').innerHTML = '<span style="color:' + voiceColor + '">' + voiceLabel + '</span>';
+  const audioLvl = d.audio_level || 0;
+  const audioBarWidth = Math.min(audioLvl * 500, 100);
+  document.getElementById('m-audio').innerHTML = '<span style="color:#00d4ff">' + audioLvl.toFixed(4) + '</span> <span style="display:inline-block;width:60px;height:8px;background:#1a2530;border-radius:4px;vertical-align:middle;overflow:hidden;"><span style="display:block;width:' + audioBarWidth + '%;height:100%;background:' + (voiceDetected ? '#ff3d5a' : '#00d4ff') + ';border-radius:4px;transition:width 0.15s;"></span></span>';
+
+  // Document face verification status
+  const docEl = document.getElementById('m-docverify');
+  if (d.doc_verified === true) {
+    docEl.innerHTML = '<span style="color:#00ff88">MATCH</span>';
+  } else if (d.doc_verify_failures > 0) {
+    docEl.innerHTML = '<span style="color:#ff3d5a">MISMATCH (' + d.doc_verify_failures + ')</span>';
+  } else if (documentUploaded) {
+    docEl.innerHTML = '<span style="color:#ffc107">PENDING</span>';
+  } else {
+    docEl.innerHTML = '<span style="color:#7a9ab5">NO DOC</span>';
+  }
+
+  // Flags
+  const flagsEl = document.getElementById('flags');
+  flagsEl.innerHTML = '';
+  (d.flags || []).forEach(f => {
+    const cls = f === 'normal' ? 'flag-normal' : 'flag-warning';
+    flagsEl.innerHTML += '<span class="flag ' + cls + '">' + f.toUpperCase() + '</span>';
+  });
+}
+
+
+function drawOverlay(d) {
+  ctx.clearRect(0, 0, 640, 480);
+  if (!d.gaze) return;
+
+  // Draw gaze direction indicator
+  const cx = 580, cy = 60, r = 30;
+  ctx.strokeStyle = 'rgba(0,212,255,0.5)';
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+
+  // Iris dot position based on ratios
+  const dotX = cx + (d.gaze.horizontal_ratio - 0.5) * r * 2;
+  const dotY = cy + (d.gaze.vertical_ratio - 0.5) * r * 2;
+  const dotColor = d.gaze.direction === 'center' ? '#00ff88' : '#ff3d5a';
+  ctx.fillStyle = dotColor;
+  ctx.beginPath(); ctx.arc(dotX, dotY, 5, 0, Math.PI * 2); ctx.fill();
+
+  // Status text
+  const isOk = d.flags.length === 1 && d.flags[0] === 'normal';
+  ctx.font = '14px monospace';
+  ctx.fillStyle = isOk ? '#00ff88' : '#ff3d5a';
+  ctx.fillText(isOk ? 'STATUS: OK' : 'STATUS: ALERT', 10, 470);
+}
+
+let lastEventLogLength = 0;
+function appendNewEvents(newEvents) {
+  if (!newEvents || !newEvents.length) return;
+  newEvents.forEach(ev => {
+    if (ev.severity !== 'resolved') addLog(ev.message || ('FLAG: ' + (ev.flag || '').toUpperCase()), true);
+  });
+}
+function refreshEventLog(eventLog) {
+  if (!eventLog) return;
+  if (eventLog.length === lastEventLogLength) return;
+  lastEventLogLength = eventLog.length;
+  const el = document.getElementById('event-log');
+  el.innerHTML = '';
+  eventLog.slice().reverse().forEach(ev => addEventToSidebar(ev, el));
+}
+function addEventToSidebar(ev, el) {
+  const time = new Date(ev.timestamp * 1000).toLocaleTimeString();
+  const severity = ev.severity || 'info';
+  const div = document.createElement('div');
+  div.className = 'event ' + severity;
+  div.innerHTML = '<div class="event-time">' + time + '</div><div class="event-msg">' + (ev.message || ev.flag) + '</div><div class="event-badge">' + (ev.flag ? ev.flag.toUpperCase().replace(/_/g, ' ') : '') + ' · ' + severity.toUpperCase() + '</div>';
+  el.appendChild(div);
+}
+
+let logCount = 0;
+function addLog(msg, isFlag) {
+  const el = document.getElementById('log');
+  const cls = isFlag ? 'log-flag' : 'log-ok';
+  const ts = new Date().toLocaleTimeString();
+  el.innerHTML = '<div class="' + cls + '">[' + ts + '] ' + msg + '</div>' + el.innerHTML;
+  logCount++;
+  if (logCount > 100) { el.removeChild(el.lastChild); }
+}
+</script>
+</body>
+</html>

@@ -7,10 +7,11 @@ POST /enroll          — register a student's face
 POST /verify          — run the LangGraph verification pipeline
 POST /auth/validate   — validate a JWT token
 GET  /health          — health check
-GET  /students        — list enrolled students
+GET  /students        — list enrolled students (id + name)
 """
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 import uuid
@@ -63,6 +64,28 @@ def _get_enrolled_path(student_id: str) -> Path | None:
         if p.exists():
             return p
     return None
+
+
+def _registry_path() -> Path:
+    return Path(settings.ENROLLED_FACES_DIR) / "registry.json"
+
+
+def _load_registry() -> dict[str, str]:
+    """Load student_id -> student_name registry."""
+    p = _registry_path()
+    if not p.exists():
+        return {}
+    try:
+        with p.open(encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_registry(registry: dict[str, str]) -> None:
+    Path(settings.ENROLLED_FACES_DIR).mkdir(parents=True, exist_ok=True)
+    with _registry_path().open("w", encoding="utf-8") as f:
+        json.dump(registry, f, indent=2)
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
@@ -148,6 +171,11 @@ async def enroll_student(
     except Exception as exc:  # noqa: BLE001
         logger.warning("Face detection during enroll failed: %s", exc)
         face_detected = True  # Assume ok, verify at recognition time
+
+    # Store name in registry for monitoring / logs
+    reg = _load_registry()
+    reg[student_id] = student_name.strip()
+    _save_registry(reg)
 
     return EnrollResponse(
         success=True,
@@ -262,14 +290,16 @@ async def validate_token(body: TokenValidateRequest):
 
 @router.get("/students", tags=["enrollment"])
 async def list_students():
-    """List all currently enrolled student IDs."""
+    """List all currently enrolled students with id and name."""
     enrolled_dir = Path(settings.ENROLLED_FACES_DIR)
-    students = []
     seen: set[str] = set()
+    ids_only: list[str] = []
     for p in sorted(enrolled_dir.glob("*")):
         if p.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}:
             sid = p.stem
             if "_id" not in sid and sid not in seen:
-                students.append(sid)
+                ids_only.append(sid)
                 seen.add(sid)
+    registry = _load_registry()
+    students = [{"id": sid, "name": registry.get(sid) or sid} for sid in ids_only]
     return {"enrolled_students": students, "count": len(students)}
