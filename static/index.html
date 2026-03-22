@@ -855,13 +855,13 @@ hr.divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; 
           </div>
         </div>
         <div class="form-group">
-          <label>ID Document (optional)</label>
+          <label>ID Document *</label>
           <div class="upload-area" id="enroll-id-area">
             <input type="file" id="enroll-id-doc" accept="image/jpeg,image/png,image/webp" />
             <img class="upload-preview" id="enroll-id-preview" src="" alt="Preview" />
             <div class="upload-icon" id="enroll-id-icon">🪪</div>
-            <div class="upload-text" id="enroll-id-text">Upload ID card / passport (optional)</div>
-            <div class="upload-hint">Used for audit trail only</div>
+            <div class="upload-text" id="enroll-id-text">Upload ID card / passport (required)</div>
+            <div class="upload-hint">Required for enrollment and audit verification</div>
           </div>
         </div>
         <button class="btn btn-primary btn-full" id="enroll-submit-btn" onclick="submitEnrollment()">
@@ -883,6 +883,9 @@ hr.divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; 
             </li>
             <li class="flex items-center gap-12" style="gap:10px; font-size:12px; color:var(--text2);">
               <span style="color:var(--green);">✓</span> Good, even lighting
+            </li>
+            <li class="flex items-center gap-12" style="gap:10px; font-size:12px; color:var(--text2);">
+              <span style="color:var(--green);">✓</span> Face photo and ID document must match
             </li>
             <li class="flex items-center gap-12" style="gap:10px; font-size:12px; color:var(--text2);">
               <span style="color:var(--red);">✗</span> No sunglasses or face coverings
@@ -1406,6 +1409,7 @@ async function submitEnrollment() {
   if (!studentId) { showToast('Please enter a student ID', 'error'); return; }
   if (!studentName) { showToast('Please enter the student name', 'error'); return; }
   if (!enrollCapturedBlob) { showToast('Please capture a face photo first', 'error'); return; }
+  if (!idFile) { showToast('Please upload an ID document', 'error'); return; }
 
   const btn = document.getElementById('enroll-submit-btn');
   const btnText = document.getElementById('enroll-btn-text');
@@ -1419,7 +1423,7 @@ async function submitEnrollment() {
     form.append('student_id',   studentId);
     form.append('student_name', studentName);
     form.append('photo',        enrollCapturedBlob, 'enroll_photo.jpg');
-    if (idFile) form.append('id_document', idFile, idFile.name);
+    form.append('id_document', idFile, idFile.name);
 
     const r = await fetch(API + '/enroll', { method: 'POST', body: form });
     const data = await r.json();
@@ -1435,7 +1439,9 @@ async function submitEnrollment() {
         window.location.href = '/monitoring/exam?' + params.toString();
       }, 800);
     } else {
-      showToast(data.message || data.detail || 'Enrollment failed', 'error');
+      const msg = data.message || data.detail || 'Enrollment failed';
+      const toastType = /^warning:/i.test(msg) ? 'info' : 'error';
+      showToast(msg, toastType);
     }
   } catch (err) {
     showToast('Network error: ' + err.message, 'error');

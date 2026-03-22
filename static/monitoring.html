@@ -282,12 +282,18 @@ video { width: 640px; height: 480px; display: block; transform: scaleX(-1); }
 const video = document.getElementById('video');
 const canvas = document.getElementById('overlay');
 const ctx = canvas.getContext('2d');
+const sendCanvas = document.createElement('canvas');
+sendCanvas.width = 640;
+sendCanvas.height = 480;
+const sendCtx = sendCanvas.getContext('2d');
 let ws = null;
 let streaming = false;
 let sendInterval = null;
 let audioCtx = null;
 let audioAnalyser = null;
 let audioDataArray = null;
+let monitorWarmReady = false;
+let monitorWarmupPromise = null;
 let proctoringEvents = [];
 let timerStarted = false;
 let l1DismissTimer = null;
@@ -305,11 +311,49 @@ let pendingMove = null;
 const MOUSE_THROTTLE_MS = 50;
 const MAX_MOUSE_LOG = 80;
 const MAX_KEYBOARD_LOG = 80;
+const INPUT_LOG_REFRESH_MS = 500;
 let mouseLog = [];
 let keyboardLog = [];
+let lastInputLogRefreshAt = 0;
 let pasteOccurred = false;
 let documentUploaded = false;
 let eventLogForExport = [];
+
+async function sleep(ms) {
+  return new Promise(function(resolve) { setTimeout(resolve, ms); });
+}
+
+async function warmupMonitoringModel(silent) {
+  if (monitorWarmReady) return true;
+  if (monitorWarmupPromise) return monitorWarmupPromise;
+
+  monitorWarmupPromise = (async function() {
+    try {
+      for (let attempt = 0; attempt < 20; attempt++) {
+        const res = await fetch('/monitoring/warmup?t=' + Date.now(), { cache: 'no-store' });
+        const data = await res.json();
+        if (data.ready || data.status === 'ready') {
+          monitorWarmReady = true;
+          if (!silent) addLog('Monitoring engine ready', false);
+          return true;
+        }
+        if (data.status === 'error') {
+          addLog('Monitoring warmup failed: ' + (data.error || 'unknown error'), true);
+          return false;
+        }
+        await sleep(300);
+      }
+      return false;
+    } catch (err) {
+      if (!silent) addLog('Warmup check failed: ' + err.message, true);
+      return false;
+    } finally {
+      monitorWarmupPromise = null;
+    }
+  })();
+
+  return monitorWarmupPromise;
+}
 
 // ── Document upload handlers ──────────────────────────────────────────
 function loadDocumentPreview(studentId) {
@@ -583,9 +627,18 @@ async function toggleStream() {
     return;
   }
   try {
+  const warmupWait = warmupMonitoringModel(true);
   const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' }, audio: true });
     video.srcObject = stream;
     await video.play();
+    // Give warmup a short head-start so first WS frame does not block on model load.
+    const warmupReady = await Promise.race([
+      warmupWait,
+      sleep(5000).then(function() { return false; })
+    ]);
+    if (!warmupReady) {
+      addLog('Monitoring model still warming up; first results may take a few seconds', false);
+    }
     // Set up audio analysis for voice activity detection
     try {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -668,13 +721,12 @@ function connectWS() {
 
 function sendFrame() {
   if (!ws || ws.readyState !== WebSocket.OPEN || !streaming) return;
-  const c = document.createElement('canvas');
-  c.width = 640; c.height = 480;
-  c.getContext('2d').drawImage(video, 0, 0, 640, 480);
-  const dataUrl = c.toDataURL('image/jpeg', 0.7);
+  sendCtx.drawImage(video, 0, 0, 640, 480);
+  const dataUrl = sendCanvas.toDataURL('image/jpeg', 0.7);
   const base64 = dataUrl.split(',')[1];
   // Append to display logs before clearing
-  const now = Date.now() / 1000;
+  const nowMs = Date.now();
+  const now = nowMs / 1000;
   mouseMovements.forEach(function(m) {
     mouseLog.push({ t: m.t, type: 'move', x: m.x, y: m.y, inside: m.inside });
   });
@@ -691,7 +743,10 @@ function sendFrame() {
   });
   while (mouseLog.length > MAX_MOUSE_LOG) mouseLog.shift();
   while (keyboardLog.length > MAX_KEYBOARD_LOG) keyboardLog.shift();
-  refreshInputLogs();
+  if ((nowMs - lastInputLogRefreshAt) >= INPUT_LOG_REFRESH_MS) {
+    refreshInputLogs();
+    lastInputLogRefreshAt = nowMs;
+  }
 
   const sid = (document.getElementById('monitor-student-id') || {}).value || '';
   const sname = (document.getElementById('monitor-student-name') || {}).value || '';
@@ -886,6 +941,7 @@ function setupMouseKeyboardCapture() {
 }
 document.addEventListener('DOMContentLoaded', function() {
   setupMouseKeyboardCapture();
+  warmupMonitoringModel(true);
   // Auto-populate from query params (unified workflow redirect)
   const params = new URLSearchParams(window.location.search);
   const sid = params.get('student_id');

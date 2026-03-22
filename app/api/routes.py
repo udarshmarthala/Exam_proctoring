@@ -66,6 +66,11 @@ def _get_enrolled_path(student_id: str) -> Path | None:
     return None
 
 
+def _get_enrolled_id_paths(student_id: str) -> list[Path]:
+    base = Path(settings.ENROLLED_FACES_DIR)
+    return [p for p in base.glob(f"{student_id}_id*") if p.is_file()]
+
+
 def _registry_path() -> Path:
     return Path(settings.ENROLLED_FACES_DIR) / "registry.json"
 
@@ -102,13 +107,14 @@ async def enroll_student(
     student_id: str = Form(..., description="Unique student ID"),
     student_name: str = Form(..., description="Student full name"),
     photo: UploadFile = File(..., description="Clear frontal face photo"),
-    id_document: UploadFile = File(None, description="Optional ID document photo"),
+    id_document: UploadFile = File(..., description="Required ID document photo"),
 ):
     """
     Enroll a new student by saving their reference face photo.
-    Optionally stores an ID document for audit purposes.
+    Stores an ID document for audit purposes.
     """
     _validate_image_upload(photo)
+    _validate_image_upload(id_document)
 
     # Determine extension
     ext_map = {
@@ -117,41 +123,28 @@ async def enroll_student(
     }
     ext = ext_map.get(photo.content_type, ".jpg")
 
+    upload_dir = Path(settings.UPLOAD_DIR)
     enrolled_dir = Path(settings.ENROLLED_FACES_DIR)
-    face_path = enrolled_dir / f"{student_id}{ext}"
+    temp_face_path = upload_dir / f"enroll_face_{uuid.uuid4().hex}{ext}"
 
-    # Check for duplicate
-    existing = _get_enrolled_path(student_id)
-    if existing:
-        # Overwrite allowed — just log it
-        logger.info("Re-enrolling student '%s', overwriting existing photo.", student_id)
-        existing.unlink(missing_ok=True)
+    id_ext = ext_map.get(id_document.content_type, ".jpg")
+    temp_id_path = upload_dir / f"enroll_id_{uuid.uuid4().hex}{id_ext}"
 
-    _save_upload(photo, face_path)
+    _save_upload(photo, temp_face_path)
+    _save_upload(id_document, temp_id_path)
 
-    # Optionally save ID document
-    if id_document:
-        try:
-            _validate_image_upload(id_document)
-            id_ext = ext_map.get(id_document.content_type, ".jpg")
-            id_path = enrolled_dir / f"{student_id}_id{id_ext}"
-            _save_upload(id_document, id_path)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Could not save ID document for %s: %s", student_id, exc)
-
-    # Quick face-detection check using DeepFace
+    # Quick face-detection checks and document-face matching using DeepFace
     face_detected = False
     try:
         from deepface import DeepFace  # noqa: PLC0415
         faces = DeepFace.extract_faces(
-            img_path=str(face_path),
+            img_path=str(temp_face_path),
             detector_backend=settings.DEEPFACE_DETECTOR,
             enforce_detection=True,
             align=True,
         )
         face_detected = len(faces) == 1
         if len(faces) == 0:
-            face_path.unlink(missing_ok=True)
             return EnrollResponse(
                 success=False,
                 student_id=student_id,
@@ -160,7 +153,6 @@ async def enroll_student(
                 embedding_stored=False,
             )
         if len(faces) > 1:
-            face_path.unlink(missing_ok=True)
             return EnrollResponse(
                 success=False,
                 student_id=student_id,
@@ -168,9 +160,81 @@ async def enroll_student(
                 face_detected=False,
                 embedding_stored=False,
             )
+
+        id_faces = DeepFace.extract_faces(
+            img_path=str(temp_id_path),
+            detector_backend=settings.DEEPFACE_DETECTOR,
+            enforce_detection=True,
+            align=True,
+        )
+        if len(id_faces) == 0:
+            return EnrollResponse(
+                success=False,
+                student_id=student_id,
+                message="No face detected in the ID document. Please upload a clearer ID photo.",
+                face_detected=False,
+                embedding_stored=False,
+            )
+        if len(id_faces) > 1:
+            return EnrollResponse(
+                success=False,
+                student_id=student_id,
+                message="Multiple faces detected in the ID document. Upload an ID with only your face visible.",
+                face_detected=False,
+                embedding_stored=False,
+            )
+
+        verify_result = DeepFace.verify(
+            img1_path=str(temp_face_path),
+            img2_path=str(temp_id_path),
+            model_name=settings.DEEPFACE_MODEL,
+            detector_backend=settings.DEEPFACE_DETECTOR,
+            distance_metric=settings.DEEPFACE_DISTANCE_METRIC,
+            # Faces were already validated above; keep verify resilient to detector edge cases.
+            enforce_detection=False,
+            align=True,
+        )
+        distance = float(verify_result.get("distance", 1.0))
+        model_threshold = float(
+            verify_result.get("threshold", settings.VERIFICATION_THRESHOLD)
+        )
+        # Document photos are often lower quality; use the model's threshold when it is higher.
+        effective_threshold = max(settings.VERIFICATION_THRESHOLD, model_threshold)
+        verified = bool(verify_result.get("verified", distance <= effective_threshold))
+        if (not verified) and distance > effective_threshold:
+            return EnrollResponse(
+                success=False,
+                student_id=student_id,
+                message="Warning: Captured face and uploaded ID face do not match. Enrollment blocked.",
+                face_detected=True,
+                embedding_stored=False,
+            )
+
+        # Persist only after successful face/document verification.
+        face_path = enrolled_dir / f"{student_id}{ext}"
+        id_path = enrolled_dir / f"{student_id}_id{id_ext}"
+        existing = _get_enrolled_path(student_id)
+        if existing:
+            logger.info("Re-enrolling student '%s', overwriting existing photo.", student_id)
+            existing.unlink(missing_ok=True)
+        for existing_id in _get_enrolled_id_paths(student_id):
+            existing_id.unlink(missing_ok=True)
+
+        shutil.move(str(temp_face_path), str(face_path))
+        shutil.move(str(temp_id_path), str(id_path))
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Face detection during enroll failed: %s", exc)
-        face_detected = True  # Assume ok, verify at recognition time
+        logger.warning("Face/document verification during enroll failed: %s", exc)
+        return EnrollResponse(
+            success=False,
+            student_id=student_id,
+            message="Warning: Could not verify face against ID document. Please retry with clearer photos.",
+            face_detected=False,
+            embedding_stored=False,
+        )
+    finally:
+        # Keep temp storage clean regardless of success/failure.
+        temp_face_path.unlink(missing_ok=True)
+        temp_id_path.unlink(missing_ok=True)
 
     # Store name in registry for monitoring / logs
     reg = _load_registry()
@@ -184,6 +248,8 @@ async def enroll_student(
         face_detected=face_detected,
         embedding_stored=True,
     )
+
+
 
 
 # ── Verification ──────────────────────────────────────────────────────────────

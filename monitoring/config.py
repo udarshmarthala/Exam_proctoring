@@ -10,31 +10,31 @@ class MonitoringConfig:
     detection_interval_ms: float = 150.0  # 5–10 FPS
     smoothing_window_ms: float = 500.0
     confidence_threshold: float = 0.85
-    grace_period_s: float = 60.0  # no alerting first 60s
+    grace_period_s: float = 10.0  # no alerting first 10s
 
     # ----- Gaze (iris ratio 0–1) -----
-    gaze_left_threshold: float = 0.35
-    gaze_right_threshold: float = 0.65
-    gaze_up_threshold: float = 0.30
-    gaze_down_threshold: float = 0.70
-    gaze_off_center_deg: float = 15.0
-    gaze_sustained_s: float = 1.5
+    gaze_left_threshold: float = 0.30
+    gaze_right_threshold: float = 0.70
+    gaze_up_threshold: float = 0.25
+    gaze_down_threshold: float = 0.75
+    gaze_off_center_deg: float = 20.0
+    gaze_sustained_s: float = 4.0     # must look away for 4s before L1
 
     # ----- Head pose (degrees) -----
-    head_yaw_warn_deg: float = 20.0   # L1 if sustained
-    head_yaw_warn_sustained_s: float = 1.5
-    head_yaw_alert_deg: float = 30.0  # L2 even brief
-    head_pitch_down_warn_deg: float = 25.0
-    head_pitch_down_sustained_s: float = 2.0
-    head_pitch_up_warn_deg: float = 20.0
-    head_pitch_up_sustained_s: float = 2.0
+    head_yaw_warn_deg: float = 30.0   # L1 if sustained (raised from 20)
+    head_yaw_warn_sustained_s: float = 3.0  # must be sustained 3s (raised from 1.5)
+    head_yaw_alert_deg: float = 45.0  # L2 even brief (raised from 30)
+    head_pitch_down_warn_deg: float = 30.0
+    head_pitch_down_sustained_s: float = 3.0
+    head_pitch_up_warn_deg: float = 25.0
+    head_pitch_up_sustained_s: float = 3.0
     # Legacy (for is_turned_away)
-    head_yaw_threshold: float = 30.0
-    head_pitch_threshold: float = 25.0
+    head_yaw_threshold: float = 45.0
+    head_pitch_threshold: float = 30.0
 
     # ----- Sustained violation durations (legacy / fallback) -----
-    head_turned_duration: float = 1.5
-    looking_away_duration: float = 1.5
+    head_turned_duration: float = 3.0
+    looking_away_duration: float = 3.0
     absence_duration: float = 3.0
 
     # ----- Eye closure / blink -----
@@ -51,10 +51,10 @@ class MonitoringConfig:
     level2_cooldown_s: float = 30.0
 
     # ----- Escalation -----
-    escalation_l1_count: int = 3
-    escalation_l1_window_s: float = 5 * 60.0   # 5 min
+    escalation_l1_count: int = 6       # raised from 3 — need 6 L1s to escalate
+    escalation_l1_window_s: float = 5 * 60.0   # 5 min window
     escalation_l1_expire_s: float = 10 * 60.0  # L1 older than 10 min don't count
-    escalation_l2_count: int = 3  # 3 L2 total → L3
+    escalation_l2_count: int = 5       # raised from 3 — need 5 L2s to escalate to L3
 
     # ----- Accessibility -----
     disable_yaw: bool = False
@@ -66,7 +66,7 @@ class MonitoringConfig:
     # ----- MediaPipe -----
     min_detection_confidence: float = 0.5
     min_tracking_confidence: float = 0.5
-    max_num_faces: int = 2
+    max_num_faces: int = 4
 
     # ----- Mouse tracking -----
     mouse_inactivity_s: float = 60.0       # L1 warning after no movement for 60s

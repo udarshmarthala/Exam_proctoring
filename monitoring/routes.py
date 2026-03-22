@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import threading
 import uuid as uuid_lib
 from datetime import datetime, timezone
 from pathlib import Path
@@ -51,6 +52,8 @@ router = APIRouter(prefix="/monitoring", tags=["monitoring"])
 
 _monitor = None
 _monitor_error: str | None = None
+_monitor_lock = threading.Lock()
+_monitor_warmup_started = False
 
 # Module-level YOLO model and executor (lazy-initialized)
 _PHONE_YOLO = None
@@ -64,14 +67,54 @@ def get_monitor():
         return _monitor, None
     if _monitor_error is not None:
         return None, _monitor_error
-    try:
-        from monitoring.behavior_monitor import BehaviorMonitor
-        from monitoring.config import MonitoringConfig
-        _monitor = BehaviorMonitor(MonitoringConfig())
-        return _monitor, None
-    except Exception as e:
-        _monitor_error = str(e)
-        return None, _monitor_error
+    with _monitor_lock:
+        if _monitor is not None:
+            return _monitor, None
+        if _monitor_error is not None:
+            return None, _monitor_error
+        try:
+            from monitoring.behavior_monitor import BehaviorMonitor
+            from monitoring.config import MonitoringConfig
+            _monitor = BehaviorMonitor(MonitoringConfig())
+            return _monitor, None
+        except Exception as e:
+            _monitor_error = str(e)
+            return None, _monitor_error
+
+
+def _background_warmup_monitor() -> None:
+    """Best-effort background warmup so first WS frame is not blocked by model load."""
+    get_monitor()
+
+
+def _start_monitor_warmup_if_needed() -> str:
+    global _monitor_warmup_started
+    if _monitor is not None:
+        return "ready"
+    if _monitor_error is not None:
+        return "error"
+
+    with _monitor_lock:
+        if _monitor is not None:
+            return "ready"
+        if _monitor_error is not None:
+            return "error"
+        if not _monitor_warmup_started:
+            _monitor_warmup_started = True
+            t = threading.Thread(target=_background_warmup_monitor, daemon=True)
+            t.start()
+        return "warming"
+
+
+@router.get("/warmup")
+async def warmup_monitor():
+    """Trigger/inspect monitor model warmup state for faster exam-start UX."""
+    status = _start_monitor_warmup_if_needed()
+    return {
+        "status": status,
+        "ready": _monitor is not None,
+        "error": _monitor_error,
+    }
 
 
 _mouse_tracker = None
@@ -234,53 +277,58 @@ async def document_preview(student_id: str = ""):
     return FileResponse(path, media_type="image/jpeg")
 
 
+_COCO_PHONE_CLASS_ID = 67  # COCO class 67 = "cell phone"
+_PHONE_CLASS_KEYWORDS = ('phone', 'cell', 'mobile', 'smartphone')
+
+
 def _phone_detection_worker(frame_bgr, conf_thresh=0.35):
-    """Run YOLO model on frame and return True if a phone is detected."""
+    """Run YOLO model on frame; return (detected: bool, confidence: float)."""
     global _PHONE_YOLO
     if YOLO is None:
-        return False
+        return False, 0.0
     try:
         if _PHONE_YOLO is None:
             _PHONE_YOLO = YOLO('yolov8n.pt')
     except Exception:
-        return False
+        return False, 0.0
     try:
         rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-        results = _PHONE_YOLO(rgb, imgsz=320, conf=conf_thresh, verbose=False)
+        results = _PHONE_YOLO(rgb, imgsz=416, conf=conf_thresh, verbose=False)
         if not results:
-            return False
+            return False, 0.0
         r = results[0]
         boxes = getattr(r, 'boxes', None)
         if boxes is None:
-            return False
+            return False, 0.0
         cls_ids = getattr(boxes, 'cls', None)
         confs = getattr(boxes, 'conf', None)
         if cls_ids is None:
-            return False
+            return False, 0.0
+        best_conf = 0.0
         for i, cid in enumerate(cls_ids):
             try:
                 idx = int(cid.item()) if hasattr(cid, 'item') else int(cid)
             except Exception:
-                try:
-                    idx = int(cid)
-                except Exception:
-                    continue
-            name = ''
-            try:
-                name = _PHONE_YOLO.names.get(idx, '') if hasattr(_PHONE_YOLO, 'names') else ''
-            except Exception:
-                name = ''
+                continue
             conf = 0.0
             try:
                 conf = float(confs[i].item()) if hasattr(confs[i], 'item') else float(confs[i])
             except Exception:
                 conf = 0.0
-            if name and ('phone' in name.lower() or 'cell' in name.lower()):
-                if conf >= conf_thresh:
-                    return True
-        return False
+            # Match by COCO class ID 67 OR by class name keywords
+            name = ''
+            try:
+                name = (_PHONE_YOLO.names.get(idx, '') if hasattr(_PHONE_YOLO, 'names') else '').lower()
+            except Exception:
+                name = ''
+            is_phone = (idx == _COCO_PHONE_CLASS_ID) or any(kw in name for kw in _PHONE_CLASS_KEYWORDS)
+            if is_phone and conf >= conf_thresh:
+                best_conf = max(best_conf, conf)
+        if best_conf > 0.0:
+            return True, best_conf
+        return False, 0.0
     except Exception:
-        return False
+        return False, 0.0
 
 
 # ── Monitoring HTML page ─────────────────────────────────────────────────────
@@ -305,6 +353,36 @@ def _capture_screenshot(frame) -> str | None:
         return None
     _, buf = cv2.imencode(".jpg", frame)
     return base64.b64encode(buf.tobytes()).decode("ascii")
+
+
+_FACE_CASCADE = None
+
+def _extract_face_crop(frame, padding: float = 0.20):
+    """
+    Detect the largest face in frame and return a tightly-cropped BGR image.
+    padding adds extra margin around the detected region so DeepFace has
+    enough context.  Returns None if no face is found.
+    """
+    global _FACE_CASCADE
+    if _FACE_CASCADE is None:
+        cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        _FACE_CASCADE = cv2.CascadeClassifier(cascade_path)
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    faces = _FACE_CASCADE.detectMultiScale(
+        gray, scaleFactor=1.1, minNeighbors=5, minSize=(80, 80)
+    )
+    if len(faces) == 0:
+        return None
+    # Pick the largest detected face
+    x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
+    pad_x = int(w * padding)
+    pad_y = int(h * padding)
+    fh, fw = frame.shape[:2]
+    x1 = max(0, x - pad_x)
+    y1 = max(0, y - pad_y)
+    x2 = min(fw, x + w + pad_x)
+    y2 = min(fh, y + h + pad_y)
+    return frame[y1:y2, x1:x2].copy()
 
 
 def _parse_incoming(raw: str):
@@ -375,17 +453,22 @@ async def ws_monitor(websocket: WebSocket):
     session_start: float | None = None
     last_l2_time: float = 0.0
     L2_COOLDOWN_S = 30.0
+    # Multiple-faces detection (independent 1-second cooldown)
+    last_multiple_faces_alert: float = 0.0
+    MULTIPLE_FACES_COOLDOWN_S: float = 1.0
     # Server-side re-verification state
     reverify_last_time: float = 0.0
     reverify_failures: int = 0
-    REVERIFY_INTERVAL_S: float = 60.0  # verify identity every 1 minute
+    REVERIFY_INTERVAL_S: float = 12.0  # verify identity every 12 seconds
+    session_ref_photo_path: Path | None = None  # live photo captured at exam start
     # Phone detection state
     phone_future = None
     phone_detect_start: float | None = None
-    phone_flagged = False
+    last_phone_alert: float = 0.0
     PHONE_CHECK_INTERVAL_S = 0.5
-    PHONE_DEBOUNCE_S = 2.0
-    PHONE_CONF_THRESH = 0.35
+    PHONE_DEBOUNCE_S = 1.5        # seconds phone must be visible before first alert
+    PHONE_ALERT_COOLDOWN_S = 10.0  # re-alert every 10s while phone stays in frame
+    PHONE_CONF_THRESH = 0.30       # lowered from 0.35 for better recall
     last_phone_check_time: float = 0.0
     # Voice activity detection state
     VOICE_THRESHOLD = 0.015
@@ -432,6 +515,18 @@ async def ws_monitor(websocket: WebSocket):
             now = time_mod.time()
             if session_start is None:
                 session_start = now
+
+            # Capture the reference photo from the very first frame of the exam (face crop only)
+            if session_ref_photo_path is None and student_id:
+                try:
+                    face_crop = _extract_face_crop(frame)
+                    if face_crop is not None:
+                        from app.core.config import settings
+                        ref_path = Path(settings.UPLOAD_DIR) / f"ref_{student_id}_{uuid_lib.uuid4().hex}.jpg"
+                        cv2.imwrite(str(ref_path), face_crop)
+                        session_ref_photo_path = ref_path
+                except Exception:
+                    pass
 
             monitor, err = get_monitor()
             if err is not None:
@@ -495,30 +590,36 @@ async def ws_monitor(websocket: WebSocket):
 
             # Proctoring alerts
             alerts_to_send: list[dict] = []
+            # Multiple faces check — runs every ~1 second with its own cooldown
             try:
-                if getattr(result, 'face_count', 0) and result.face_count > 1:
-                    if (now - last_l2_time) >= L2_COOLDOWN_S:
-                        last_l2_time = now
-                        screenshot_ref = _capture_screenshot(frame)
-                        pe = {
-                            "id": str(uuid_lib.uuid4()),
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                            "event_type": "multiple_faces",
-                            "severity": 2,
-                            "duration_ms": 0,
-                            "head_yaw": None,
-                            "head_pitch": None,
-                            "gaze_vector": None,
-                            "confidence_score": 0.0,
-                            "screenshot_ref": screenshot_ref,
-                            "dismissed": False,
-                            "flagged_by_proctor": False,
-                            "message": f"Multiple faces detected ({result.face_count})",
-                        }
-                        proctoring_events.append(pe)
-                        if len(proctoring_events) > 500:
-                            proctoring_events.pop(0)
-                        alerts_to_send.append({"level": 2, "event_type": "multiple_faces", "message": pe["message"], "id": pe["id"]})
+                face_count = getattr(result, 'face_count', 0)
+                if face_count > 1 and (now - last_multiple_faces_alert) >= MULTIPLE_FACES_COOLDOWN_S:
+                    last_multiple_faces_alert = now
+                    screenshot_ref = _capture_screenshot(frame)
+                    pe = {
+                        "id": str(uuid_lib.uuid4()),
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "event_type": "multiple_faces",
+                        "severity": 2,
+                        "duration_ms": 0,
+                        "head_yaw": None,
+                        "head_pitch": None,
+                        "gaze_vector": None,
+                        "confidence_score": 0.0,
+                        "screenshot_ref": screenshot_ref,
+                        "dismissed": False,
+                        "flagged_by_proctor": False,
+                        "message": f"Multiple faces detected ({face_count})",
+                    }
+                    proctoring_events.append(pe)
+                    if len(proctoring_events) > 500:
+                        proctoring_events.pop(0)
+                    alerts_to_send.append({"level": 2, "event_type": "multiple_faces", "message": pe["message"], "id": pe["id"]})
+                    entry = _event_entry(now, BehaviorFlag.MULTIPLE_FACES, EventSeverity.WARNING, pe["message"])
+                    event_log.append(entry)
+                    new_events.append(entry)
+                    if len(event_log) > max_log_entries:
+                        event_log.pop(0)
             except Exception:
                 pass
 
@@ -562,85 +663,22 @@ async def ws_monitor(websocket: WebSocket):
                     if len(event_log) > max_log_entries:
                         event_log.pop(0)
 
-            # Server-side periodic re-verification
-            if student_id:
+            # Server-side periodic re-verification (every 12s against session start photo)
+            if student_id and session_ref_photo_path is not None:
                 try:
                     if (now - reverify_last_time) >= REVERIFY_INTERVAL_S:
                         reverify_last_time = now
-                        enrolled_path = _find_enrolled_image(student_id)
-                        if enrolled_path:
-                            try:
-                                from app.core.config import settings
-                                probe_path = Path(settings.UPLOAD_DIR) / f"probe_ws_{uuid_lib.uuid4().hex}.jpg"
-                                cv2.imwrite(str(probe_path), frame)
-                                from deepface import DeepFace
-                                v = DeepFace.verify(
-                                    img1_path=str(probe_path),
-                                    img2_path=str(enrolled_path),
-                                    model_name=settings.DEEPFACE_MODEL,
-                                    detector_backend=settings.DEEPFACE_DETECTOR,
-                                    distance_metric=settings.DEEPFACE_DISTANCE_METRIC,
-                                    enforce_detection=False,
-                                    silent=True,
-                                )
-                                verified = bool(v.get("verified", False))
-                                distance = float(v.get("distance", 1.0))
-                                threshold = float(v.get("threshold", settings.VERIFICATION_THRESHOLD))
-                                if not verified:
-                                    reverify_failures += 1
-                                    screenshot_ref = _capture_screenshot(frame)
-                                    pe = {
-                                        "id": str(uuid_lib.uuid4()),
-                                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                                        "event_type": "identity_mismatch",
-                                        "severity": 2,
-                                        "duration_ms": 0,
-                                        "head_yaw": None,
-                                        "head_pitch": None,
-                                        "gaze_vector": None,
-                                        "confidence_score": 1.0 - min(max(distance / max(threshold * 2, 0.001), 0.0), 1.0),
-                                        "screenshot_ref": screenshot_ref,
-                                        "dismissed": False,
-                                        "flagged_by_proctor": False,
-                                        "message": f"Identity mismatch detected (distance={distance:.4f})",
-                                    }
-                                    proctoring_events.append(pe)
-                                    if len(proctoring_events) > 500:
-                                        proctoring_events.pop(0)
-                                    alerts_to_send.append({"level": 2, "event_type": "identity_mismatch", "message": pe["message"], "id": pe["id"]})
-                                else:
-                                    if reverify_failures > 0:
-                                        entry = _event_entry(now, BehaviorFlag.NORMAL, EventSeverity.RESOLVED, "Identity re-verified")
-                                        event_log.append(entry)
-                                        new_events.append(entry)
-                                    reverify_failures = 0
-                            finally:
-                                try:
-                                    probe_path.unlink(missing_ok=True)
-                                except Exception:
-                                    pass
-                except Exception as exc:
-                    try:
-                        entry = _event_entry(now, BehaviorFlag.NORMAL, EventSeverity.WARNING, f"Reverify error: {exc}")
-                        event_log.append(entry)
-                        new_events.append(entry)
-                    except Exception:
-                        pass
-
-            # Document face verification (every 1 minute)
-            if student_id and (now - doc_verify_last_time) >= DOC_VERIFY_INTERVAL_S:
-                doc_path = _find_document_face(student_id)
-                if doc_path:
-                    doc_verify_last_time = now
-                    try:
-                        from app.core.config import settings
-                        probe_path = Path(settings.UPLOAD_DIR) / f"docprobe_{uuid_lib.uuid4().hex}.jpg"
-                        cv2.imwrite(str(probe_path), frame)
                         try:
+                            from app.core.config import settings
+                            probe_crop = _extract_face_crop(frame)
+                            if probe_crop is None:
+                                probe_crop = frame  # fall back to full frame if detector misses
+                            probe_path = Path(settings.UPLOAD_DIR) / f"probe_ws_{uuid_lib.uuid4().hex}.jpg"
+                            cv2.imwrite(str(probe_path), probe_crop)
                             from deepface import DeepFace
                             v = DeepFace.verify(
                                 img1_path=str(probe_path),
-                                img2_path=doc_path,
+                                img2_path=str(session_ref_photo_path),
                                 model_name=settings.DEEPFACE_MODEL,
                                 detector_backend=settings.DEEPFACE_DETECTOR,
                                 distance_metric=settings.DEEPFACE_DISTANCE_METRIC,
@@ -651,12 +689,12 @@ async def ws_monitor(websocket: WebSocket):
                             distance = float(v.get("distance", 1.0))
                             threshold = float(v.get("threshold", settings.VERIFICATION_THRESHOLD))
                             if not verified:
-                                doc_verify_failures += 1
+                                reverify_failures += 1
                                 screenshot_ref = _capture_screenshot(frame)
                                 pe = {
                                     "id": str(uuid_lib.uuid4()),
                                     "timestamp": datetime.now(timezone.utc).isoformat(),
-                                    "event_type": "document_face_mismatch",
+                                    "event_type": "identity_mismatch",
                                     "severity": 2,
                                     "duration_ms": 0,
                                     "head_yaw": None,
@@ -666,34 +704,30 @@ async def ws_monitor(websocket: WebSocket):
                                     "screenshot_ref": screenshot_ref,
                                     "dismissed": False,
                                     "flagged_by_proctor": False,
-                                    "message": f"Face does not match document (distance={distance:.4f}, failures={doc_verify_failures})",
+                                    "message": f"Identity mismatch detected (distance={distance:.4f})",
                                 }
                                 proctoring_events.append(pe)
                                 if len(proctoring_events) > 500:
                                     proctoring_events.pop(0)
-                                alert_level = 2 if doc_verify_failures < 3 else 3
-                                alerts_to_send.append({"level": alert_level, "event_type": "document_face_mismatch", "message": pe["message"], "id": pe["id"]})
-                                entry = _event_entry(now, BehaviorFlag.DOCUMENT_MISMATCH, EventSeverity.CRITICAL, pe["message"])
-                                event_log.append(entry)
-                                new_events.append(entry)
+                                alerts_to_send.append({"level": 2, "event_type": "identity_mismatch", "message": pe["message"], "id": pe["id"]})
                             else:
-                                if doc_verify_failures > 0:
-                                    entry = _event_entry(now, BehaviorFlag.NORMAL, EventSeverity.RESOLVED, "Document face re-verified")
+                                if reverify_failures > 0:
+                                    entry = _event_entry(now, BehaviorFlag.NORMAL, EventSeverity.RESOLVED, "Identity re-verified")
                                     event_log.append(entry)
                                     new_events.append(entry)
-                                doc_verify_failures = 0
+                                reverify_failures = 0
                         finally:
                             try:
                                 probe_path.unlink(missing_ok=True)
                             except Exception:
                                 pass
-                    except Exception as exc:
-                        try:
-                            entry = _event_entry(now, BehaviorFlag.NORMAL, EventSeverity.WARNING, f"Doc verify error: {exc}")
-                            event_log.append(entry)
-                            new_events.append(entry)
-                        except Exception:
-                            pass
+                except Exception as exc:
+                    try:
+                        entry = _event_entry(now, BehaviorFlag.NORMAL, EventSeverity.WARNING, f"Reverify error: {exc}")
+                        event_log.append(entry)
+                        new_events.append(entry)
+                    except Exception:
+                        pass
 
             # Phone detection (background YOLO)
             try:
@@ -703,16 +737,23 @@ async def ws_monitor(websocket: WebSocket):
 
                 if phone_future is not None and phone_future.done():
                     detected = False
+                    phone_conf = 0.0
                     try:
-                        detected = bool(phone_future.result(timeout=0))
+                        result_val = phone_future.result(timeout=0)
+                        if isinstance(result_val, tuple):
+                            detected, phone_conf = result_val
+                        else:
+                            detected = bool(result_val)
                     except Exception:
                         detected = False
                     phone_future = None
                     if detected:
                         if phone_detect_start is None:
                             phone_detect_start = now
-                        if phone_detect_start is not None and (now - phone_detect_start) >= PHONE_DEBOUNCE_S and not phone_flagged:
-                            phone_flagged = True
+                        debounced = (now - phone_detect_start) >= PHONE_DEBOUNCE_S
+                        cooldown_ok = (now - last_phone_alert) >= PHONE_ALERT_COOLDOWN_S
+                        if debounced and cooldown_ok:
+                            last_phone_alert = now
                             screenshot_ref = _capture_screenshot(frame)
                             pe = {
                                 "id": str(uuid_lib.uuid4()),
@@ -723,19 +764,21 @@ async def ws_monitor(websocket: WebSocket):
                                 "head_yaw": None,
                                 "head_pitch": None,
                                 "gaze_vector": None,
-                                "confidence_score": None,
+                                "confidence_score": round(phone_conf, 3),
                                 "screenshot_ref": screenshot_ref,
                                 "dismissed": False,
                                 "flagged_by_proctor": False,
-                                "message": "Phone detected (sustained)",
+                                "message": f"Phone detected (conf={phone_conf:.2f})",
                             }
                             proctoring_events.append(pe)
                             if len(proctoring_events) > 500:
                                 proctoring_events.pop(0)
                             alerts_to_send.append({"level": 2, "event_type": ProctoringEventType.possible_phone.value, "message": pe["message"], "id": pe["id"]})
+                            entry = _event_entry(now, BehaviorFlag.NORMAL, EventSeverity.WARNING, pe["message"])
+                            event_log.append(entry)
+                            new_events.append(entry)
                     else:
                         phone_detect_start = None
-                        phone_flagged = False
 
                 if phone_future is None and (now - last_phone_check_time) >= PHONE_CHECK_INTERVAL_S and YOLO is not None:
                     last_phone_check_time = now
@@ -827,3 +870,10 @@ async def ws_monitor(websocket: WebSocket):
 
     except WebSocketDisconnect:
         pass
+    finally:
+        # Clean up session reference photo
+        if session_ref_photo_path is not None:
+            try:
+                session_ref_photo_path.unlink(missing_ok=True)
+            except Exception:
+                pass

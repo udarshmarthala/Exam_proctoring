@@ -38,3 +38,14 @@ data/uploads/*
 !data/uploads/.gitkeep
 data/enrolled/*
 !data/enrolled/.gitkeep
+data/documents/*
+!data/documents/.gitkeep
+
+# YOLO model weights (large binary, download at runtime)
+*.pt
+*.pth
+
+# Temp probe/reference images written during proctoring
+data/uploads/probe_ws_*
+data/uploads/docprobe_*
+data/uploads/ref_*
