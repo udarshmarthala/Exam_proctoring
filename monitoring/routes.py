@@ -386,7 +386,7 @@ def _extract_face_crop(frame, padding: float = 0.20):
 
 
 def _parse_incoming(raw: str):
-    """Parse incoming WS message: JSON with frame + optional mouse/keys/paste_event/audio_level + student_id + student_name."""
+    """Parse incoming WS message: JSON with frame + optional mouse/keys/paste_event/tab_switch_event/audio_level + student_id + student_name."""
     raw = raw.strip()
     if raw.startswith("{"):
         try:
@@ -395,13 +395,14 @@ def _parse_incoming(raw: str):
             mouse = obj.get("mouse")
             keys = obj.get("keys")
             paste_event = bool(obj.get("paste_event"))
+            tab_switch_event = bool(obj.get("tab_switch_event"))
             audio_level = float(obj.get("audio_level", 0.0))
             student_id = obj.get("student_id") if "student_id" in obj else None
             student_name = (obj.get("student_name") or "").strip() or None
-            return frame_b64, mouse, keys, paste_event, audio_level, student_id, student_name
+            return frame_b64, mouse, keys, paste_event, tab_switch_event, audio_level, student_id, student_name
         except json.JSONDecodeError:
             pass
-    return raw, None, None, False, 0.0, None, None
+    return raw, None, None, False, False, 0.0, None, None
 
 
 def _find_enrolled_image(student_id: str) -> str | None:
@@ -508,7 +509,7 @@ async def ws_monitor(websocket: WebSocket):
     try:
         while True:
             raw = await websocket.receive_text()
-            frame_b64, mouse_data, key_events, paste_event, audio_level, student_id, student_name = _parse_incoming(raw)
+            frame_b64, mouse_data, key_events, paste_event, tab_switch_event, audio_level, student_id, student_name = _parse_incoming(raw)
             if student_id and session_student_id is None:
                 session_student_id = (student_id or "").strip() or None
             if student_name:
@@ -571,6 +572,14 @@ async def ws_monitor(websocket: WebSocket):
                     "level": 2,
                     "event_type": ProctoringEventType.paste_used.value,
                     "message": "Paste used (clipboard)",
+                    "duration_ms": 0,
+                    "confidence_score": 1.0,
+                })
+            if tab_switch_event:
+                extra_alerts.append({
+                    "level": 2,
+                    "event_type": ProctoringEventType.tab_switch.value,
+                    "message": "Candidate switched browser tab or application window",
                     "duration_ms": 0,
                     "confidence_score": 1.0,
                 })

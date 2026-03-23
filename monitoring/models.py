@@ -28,6 +28,8 @@ class ProctoringEventType(str, Enum):
     copy_paste_suspected = "copy_paste_suspected"
     paste_used = "paste_used"
     keyboard_inactivity = "keyboard_inactivity"
+    # Tab / window focus
+    tab_switch = "tab_switch"
 
 
 class AlertLevel(int, Enum):
@@ -61,6 +63,7 @@ class BehaviorFlag(str, Enum):
     KEYBOARD_INACTIVE = "keyboard_inactive"
     TALKING = "talking"
     DOCUMENT_MISMATCH = "document_mismatch"
+    TAB_SWITCH = "tab_switch"
 
 
 class EventSeverity(str, Enum):
@@ -88,6 +91,7 @@ FLAG_SEVERITY: dict[BehaviorFlag, EventSeverity] = {
     BehaviorFlag.KEYBOARD_INACTIVE: EventSeverity.INFO,
     BehaviorFlag.TALKING: EventSeverity.CRITICAL,
     BehaviorFlag.DOCUMENT_MISMATCH: EventSeverity.CRITICAL,
+    BehaviorFlag.TAB_SWITCH: EventSeverity.CRITICAL,
 }
 
 # Human-readable messages for audit log
@@ -107,6 +111,7 @@ EVENT_MESSAGES: dict[BehaviorFlag, str] = {
     BehaviorFlag.KEYBOARD_INACTIVE: "Prolonged keyboard inactivity",
     BehaviorFlag.TALKING: "Lip movement detected — possible talking",
     BehaviorFlag.DOCUMENT_MISMATCH: "Face does not match uploaded document",
+    BehaviorFlag.TAB_SWITCH: "Candidate switched browser tab or application window",
 }
 
 

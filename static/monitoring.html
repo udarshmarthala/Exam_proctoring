@@ -316,6 +316,7 @@ let mouseLog = [];
 let keyboardLog = [];
 let lastInputLogRefreshAt = 0;
 let pasteOccurred = false;
+let tabSwitchOccurred = false;
 let documentUploaded = false;
 let eventLogForExport = [];
 
@@ -759,11 +760,13 @@ function sendFrame() {
     } : null,
     keys: keyEvents.length ? keyEvents.slice() : null,
     paste_event: pasteOccurred,
+    tab_switch_event: tabSwitchOccurred,
     audio_level: getAudioLevel(),
     student_id: sid || undefined,
     student_name: sname || undefined,
   };
   pasteOccurred = false;
+  tabSwitchOccurred = false;
   ws.send(JSON.stringify(payload));
   mouseMovements = [];
   mouseClicks = [];
@@ -936,6 +939,20 @@ function setupMouseKeyboardCapture() {
   document.addEventListener('keydown', function(ev) { recordKey(ev, true); });
   document.addEventListener('keyup', function(ev) { recordKey(ev, false); });
   document.addEventListener('paste', function() { pasteOccurred = true; });
+
+  // Tab switch / window focus loss detection
+  document.addEventListener('visibilitychange', function() {
+    if (document.hidden && streaming) {
+      tabSwitchOccurred = true;
+      handleAlerts([{ level: 2, message: 'Tab switch detected — do not leave the exam tab!' }]);
+    }
+  });
+  window.addEventListener('blur', function() {
+    if (streaming) {
+      tabSwitchOccurred = true;
+      handleAlerts([{ level: 2, message: 'Window focus lost — return to the exam immediately!' }]);
+    }
+  });
 }
 document.addEventListener('DOMContentLoaded', function() {
   setupMouseKeyboardCapture();
