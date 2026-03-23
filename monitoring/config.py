@@ -13,21 +13,21 @@ class MonitoringConfig:
     grace_period_s: float = 10.0  # no alerting first 10s
 
     # ----- Gaze (iris ratio 0–1) -----
-    gaze_left_threshold: float = 0.30
-    gaze_right_threshold: float = 0.70
-    gaze_up_threshold: float = 0.25
-    gaze_down_threshold: float = 0.75
+    gaze_left_threshold: float = 0.22
+    gaze_right_threshold: float = 0.78
+    gaze_up_threshold: float = 0.18
+    gaze_down_threshold: float = 0.82
     gaze_off_center_deg: float = 20.0
-    gaze_sustained_s: float = 4.0     # must look away for 4s before L1
+    gaze_sustained_s: float = 7.0     # must look away for 7s before L1
 
     # ----- Head pose (degrees) -----
-    head_yaw_warn_deg: float = 30.0   # L1 if sustained (raised from 20)
-    head_yaw_warn_sustained_s: float = 3.0  # must be sustained 3s (raised from 1.5)
-    head_yaw_alert_deg: float = 45.0  # L2 even brief (raised from 30)
-    head_pitch_down_warn_deg: float = 30.0
-    head_pitch_down_sustained_s: float = 3.0
-    head_pitch_up_warn_deg: float = 25.0
-    head_pitch_up_sustained_s: float = 3.0
+    head_yaw_warn_deg: float = 45.0   # L1 if sustained (raised from 30)
+    head_yaw_warn_sustained_s: float = 8.0  # must be sustained 8s (raised from 5)
+    head_yaw_alert_deg: float = 65.0  # L2 even brief (raised from 45)
+    head_pitch_down_warn_deg: float = 40.0
+    head_pitch_down_sustained_s: float = 5.0
+    head_pitch_up_warn_deg: float = 35.0
+    head_pitch_up_sustained_s: float = 5.0
     # Legacy (for is_turned_away)
     head_yaw_threshold: float = 45.0
     head_pitch_threshold: float = 30.0
@@ -51,7 +51,7 @@ class MonitoringConfig:
     level2_cooldown_s: float = 30.0
 
     # ----- Escalation -----
-    escalation_l1_count: int = 6       # raised from 3 — need 6 L1s to escalate
+    escalation_l1_count: int = 10      # need 10 L1s in window to escalate
     escalation_l1_window_s: float = 5 * 60.0   # 5 min window
     escalation_l1_expire_s: float = 10 * 60.0  # L1 older than 10 min don't count
     escalation_l2_count: int = 5       # raised from 3 — need 5 L2s to escalate to L3

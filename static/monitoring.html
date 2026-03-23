@@ -780,8 +780,6 @@ function startReverifyTimerFromInputs() {
 
 function startReverifyTimer(studentId, minutes) {
   stopReverifyTimer();
-  // run immediately then every minutes
-  doReverify(studentId);
   reverifyIntervalId = setInterval(() => doReverify(studentId), minutes * 60 * 1000);
   addLog('Started periodic re-verification every ' + minutes + ' min for ' + studentId, false);
 }

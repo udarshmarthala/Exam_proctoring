@@ -833,9 +833,15 @@ hr.divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; 
           <input type="text" id="enroll-name" placeholder="e.g. Jane Doe" autocomplete="off" />
         </div>
         <hr class="divider" />
-        <div class="card-label">Biometric Photo</div>
+        <div class="card-label">Biometric Photos</div>
         <div class="form-group">
-          <label>Face Photo * (clear, frontal, well-lit)</label>
+          <!-- Step prompt (shown after camera starts) -->
+          <div id="enroll-step-bar" style="display:none; margin-bottom:8px; padding:8px 12px; background:#0a1520; border-radius:6px; border:1px solid #1e2d3d; display:none;">
+            <div style="font-family:var(--font-mono); font-size:9px; color:var(--text3); text-transform:uppercase; letter-spacing:0.08em;">Photo <span id="enroll-step-num">1</span> of 3</div>
+            <div id="enroll-step-label" style="font-size:13px; color:var(--accent); font-weight:600; margin-top:2px;">Face FORWARD</div>
+            <div id="enroll-step-hint" style="font-size:11px; color:var(--text2); margin-top:2px;">Look straight into the camera with a neutral expression</div>
+          </div>
+
           <div class="webcam-container" id="enroll-webcam-container">
             <video id="enroll-webcam-video" autoplay playsinline muted></video>
             <canvas id="enroll-webcam-canvas" style="display:none;"></canvas>
@@ -848,10 +854,27 @@ hr.divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; 
               <span>Camera not started</span>
             </div>
           </div>
+
+          <!-- Thumbnail strip showing captured photos -->
+          <div id="enroll-thumbs" style="display:none; gap:8px; margin-top:8px;">
+            <div style="text-align:center;">
+              <canvas id="thumb-0" width="88" height="66" style="border-radius:5px; border:2px solid #1e2d3d; background:#0a0e12; display:block;"></canvas>
+              <div style="font-size:9px; color:var(--text3); margin-top:3px; font-family:var(--font-mono);">FORWARD</div>
+            </div>
+            <div style="text-align:center;">
+              <canvas id="thumb-1" width="88" height="66" style="border-radius:5px; border:2px solid #1e2d3d; background:#0a0e12; display:block;"></canvas>
+              <div style="font-size:9px; color:var(--text3); margin-top:3px; font-family:var(--font-mono);">LEFT</div>
+            </div>
+            <div style="text-align:center;">
+              <canvas id="thumb-2" width="88" height="66" style="border-radius:5px; border:2px solid #1e2d3d; background:#0a0e12; display:block;"></canvas>
+              <div style="font-size:9px; color:var(--text3); margin-top:3px; font-family:var(--font-mono);">RIGHT</div>
+            </div>
+          </div>
+
           <div class="webcam-controls">
             <button type="button" class="btn btn-ghost" id="enroll-start-camera-btn" onclick="startEnrollCamera()">Start Camera</button>
-            <button type="button" class="btn btn-primary hidden" id="enroll-capture-btn" onclick="captureEnrollFrame()">Capture Photo</button>
-            <button type="button" class="btn btn-ghost hidden" id="enroll-retake-btn" onclick="retakeEnrollPhoto()">Retake</button>
+            <button type="button" class="btn btn-primary hidden" id="enroll-capture-btn" onclick="captureEnrollStep()">Capture</button>
+            <button type="button" class="btn btn-ghost hidden" id="enroll-retake-btn" onclick="retakeEnrollStep()">Retake</button>
           </div>
         </div>
         <div class="form-group">
@@ -869,6 +892,7 @@ hr.divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; 
           <div class="spinner hidden" id="enroll-spinner"></div>
         </button>
       </div>
+
 
       <!-- Info + enrolled list -->
       <div style="display:flex; flex-direction:column; gap:16px;">
@@ -1162,7 +1186,20 @@ let verifyMode = 'webcam';
 let webcamStream = null;
 let capturedBlob = null;
 let enrollCamStream = null;
-let enrollCapturedBlob = null;
+let enrolledStudentId = null;
+let enrolledStudentName = null;
+
+// Guided 3-step capture: index 0 = forward, 1 = left, 2 = right
+const ENROLL_STEPS = [
+  { label: 'Face FORWARD', hint: 'Look straight into the camera with a neutral expression' },
+  { label: 'Turn slightly LEFT', hint: 'Gently turn your head to the left (15–20 degrees)' },
+  { label: 'Turn slightly RIGHT', hint: 'Gently turn your head to the right (15–20 degrees)' },
+];
+let enrollStep = 0;           // which step we're on (0–2)
+const enrollBlobs = [null, null, null]; // captured blob for each step
+
+// Legacy alias kept so any remaining references don't break
+Object.defineProperty(window, 'enrollCapturedBlob', { get: () => enrollBlobs[0] });
 let currentToken = null;
 let currentStudentId = null;
 
@@ -1240,7 +1277,7 @@ setupUploadArea('enroll-id-doc', 'enroll-id-preview', 'enroll-id-area', 'enroll-
 setupUploadArea('verify-photo', 'verify-photo-preview', 'verify-photo-area', 'verify-upload-icon', 'verify-upload-text');
 
 /* ═══════════════════════════════════════════════
-   ENROLL WEBCAM
+   ENROLL WEBCAM — guided 3-step capture
 ═══════════════════════════════════════════════ */
 async function startEnrollCamera() {
   try {
@@ -1251,44 +1288,98 @@ async function startEnrollCamera() {
     document.getElementById('enroll-webcam-placeholder').style.display = 'none';
     document.getElementById('enroll-start-camera-btn').classList.add('hidden');
     document.getElementById('enroll-capture-btn').classList.remove('hidden');
-    enrollCapturedBlob = null;
-    showToast('Camera started — position your face in the frame', 'info');
+    // Reset state
+    enrollStep = 0;
+    enrollBlobs.fill(null);
+    _updateEnrollStepUI();
+    // Show thumb strip and step bar
+    const thumbs = document.getElementById('enroll-thumbs');
+    thumbs.style.display = 'flex';
+    document.getElementById('enroll-step-bar').style.display = 'block';
+    // Clear thumbnails
+    [0, 1, 2].forEach(i => {
+      const c = document.getElementById('thumb-' + i);
+      c.getContext('2d').clearRect(0, 0, c.width, c.height);
+      c.style.borderColor = '#1e2d3d';
+    });
+    showToast('Camera started — follow the prompts to capture 3 photos', 'info');
   } catch (err) {
     showToast('Camera access denied: ' + err.message, 'error');
   }
 }
 
-function captureEnrollFrame() {
+function _updateEnrollStepUI() {
+  const step = ENROLL_STEPS[enrollStep];
+  document.getElementById('enroll-step-num').textContent = enrollStep + 1;
+  document.getElementById('enroll-step-label').textContent = step.label;
+  document.getElementById('enroll-step-hint').textContent = step.hint;
+  document.getElementById('enroll-capture-btn').textContent = 'Capture';
+  document.getElementById('enroll-retake-btn').classList.add('hidden');
+  // Show video, hide frozen canvas
+  document.getElementById('enroll-webcam-video').style.display = 'block';
+  document.getElementById('enroll-webcam-canvas').style.display = 'none';
+}
+
+function captureEnrollStep() {
   const video = document.getElementById('enroll-webcam-video');
   const canvas = document.getElementById('enroll-webcam-canvas');
   canvas.width  = video.videoWidth  || 640;
   canvas.height = video.videoHeight || 480;
   canvas.getContext('2d').drawImage(video, 0, 0);
   canvas.toBlob(blob => {
-    enrollCapturedBlob = blob;
+    enrollBlobs[enrollStep] = blob;
+    // Draw into thumbnail
+    const thumb = document.getElementById('thumb-' + enrollStep);
+    thumb.getContext('2d').drawImage(canvas, 0, 0, thumb.width, thumb.height);
+    thumb.style.borderColor = 'var(--green)';
+    // Freeze the preview briefly
     canvas.style.display = 'block';
     video.style.display  = 'none';
     document.getElementById('enroll-capture-btn').classList.add('hidden');
     document.getElementById('enroll-retake-btn').classList.remove('hidden');
-    showToast('Photo captured — ready to enroll', 'success');
+
+    if (enrollStep < 2) {
+      // Auto-advance after 1.2s so user can see the freeze, then move to next step
+      showToast(`Photo ${enrollStep + 1}/3 captured`, 'success');
+      setTimeout(() => {
+        enrollStep++;
+        _updateEnrollStepUI();
+        document.getElementById('enroll-capture-btn').classList.remove('hidden');
+      }, 1200);
+    } else {
+      // All 3 done
+      showToast('All 3 photos captured — fill in details and click Enroll', 'success');
+      document.getElementById('enroll-step-label').textContent = 'All photos captured';
+      document.getElementById('enroll-step-hint').textContent = 'Fill in Student ID & Name, upload your ID document, then click Enroll Student';
+    }
   }, 'image/jpeg', 0.92);
 }
 
-function retakeEnrollPhoto() {
-  const video  = document.getElementById('enroll-webcam-video');
-  const canvas = document.getElementById('enroll-webcam-canvas');
-  canvas.style.display = 'none';
-  video.style.display  = 'block';
-  enrollCapturedBlob = null;
+function retakeEnrollStep() {
+  enrollBlobs[enrollStep] = null;
+  const thumb = document.getElementById('thumb-' + enrollStep);
+  thumb.getContext('2d').clearRect(0, 0, thumb.width, thumb.height);
+  thumb.style.borderColor = '#1e2d3d';
+  _updateEnrollStepUI();
   document.getElementById('enroll-capture-btn').classList.remove('hidden');
-  document.getElementById('enroll-retake-btn').classList.add('hidden');
 }
+
+// Legacy no-op kept so nothing breaks if called
+function captureEnrollFrame() { captureEnrollStep(); }
+function retakeEnrollPhoto()  { retakeEnrollStep(); }
 
 function stopEnrollCamera() {
   if (enrollCamStream) {
     enrollCamStream.getTracks().forEach(t => t.stop());
     enrollCamStream = null;
   }
+}
+
+function redirectToExam() {
+  const params = new URLSearchParams();
+  params.set('student_id', enrolledStudentId);
+  params.set('student_name', enrolledStudentName);
+  window.location.href = '/monitoring/exam?' + params.toString();
 }
 
 /* ═══════════════════════════════════════════════
@@ -1406,12 +1497,12 @@ async function submitEnrollment() {
   const studentName = document.getElementById('enroll-name').value.trim();
   const idFile      = document.getElementById('enroll-id-doc').files[0];
 
-  if (!studentId) { showToast('Please enter a student ID', 'error'); return; }
-  if (!studentName) { showToast('Please enter the student name', 'error'); return; }
-  if (!enrollCapturedBlob) { showToast('Please capture a face photo first', 'error'); return; }
-  if (!idFile) { showToast('Please upload an ID document', 'error'); return; }
+  if (!studentId)      { showToast('Please enter a student ID', 'error'); return; }
+  if (!studentName)    { showToast('Please enter the student name', 'error'); return; }
+  if (!enrollBlobs[0]) { showToast('Please capture all 3 face photos first', 'error'); return; }
+  if (!idFile)         { showToast('Please upload an ID document', 'error'); return; }
 
-  const btn = document.getElementById('enroll-submit-btn');
+  const btn     = document.getElementById('enroll-submit-btn');
   const btnText = document.getElementById('enroll-btn-text');
   const spinner = document.getElementById('enroll-spinner');
   btn.disabled = true;
@@ -1419,29 +1510,37 @@ async function submitEnrollment() {
   spinner.classList.remove('hidden');
 
   try {
+    // Step 1 — enroll with the frontal (photo 0) as the primary reference
     const form = new FormData();
     form.append('student_id',   studentId);
     form.append('student_name', studentName);
-    form.append('photo',        enrollCapturedBlob, 'enroll_photo.jpg');
-    form.append('id_document', idFile, idFile.name);
+    form.append('photo',        enrollBlobs[0], 'enroll_photo.jpg');
+    form.append('id_document',  idFile, idFile.name);
 
-    const r = await fetch(API + '/enroll', { method: 'POST', body: form });
+    const r    = await fetch(API + '/enroll', { method: 'POST', body: form });
     const data = await r.json();
 
     if (r.ok && data.success) {
-      showToast(`✓ ${studentName} enrolled — starting exam session…`, 'success');
+      enrolledStudentId   = studentId;
+      enrolledStudentName = studentName;
+
+      // Step 2 — save angle shots (photos 1 & 2) in the background
+      const anglePhotos = enrollBlobs.slice(1).filter(b => b !== null);
+      if (anglePhotos.length > 0) {
+        try {
+          const af = new FormData();
+          af.append('student_id', studentId);
+          anglePhotos.forEach((blob, i) => af.append('photos', blob, `angle_${i}.jpg`));
+          await fetch(API + '/enroll/angles', { method: 'POST', body: af });
+        } catch (_) { /* non-fatal */ }
+      }
+
+      showToast(`✓ ${studentName} enrolled with ${1 + anglePhotos.length} reference photo(s) — starting exam…`, 'success');
       stopEnrollCamera();
-      // Go directly to exam monitoring (verification happens automatically every 1 min)
-      const params = new URLSearchParams();
-      params.set('student_id', studentId);
-      params.set('student_name', studentName);
-      setTimeout(() => {
-        window.location.href = '/monitoring/exam?' + params.toString();
-      }, 800);
+      setTimeout(redirectToExam, 800);
     } else {
       const msg = data.message || data.detail || 'Enrollment failed';
-      const toastType = /^warning:/i.test(msg) ? 'info' : 'error';
-      showToast(msg, toastType);
+      showToast(msg, /^warning:/i.test(msg) ? 'info' : 'error');
     }
   } catch (err) {
     showToast('Network error: ' + err.message, 'error');
@@ -1703,6 +1802,8 @@ function resetToVerify() {
    KEYBOARD SHORTCUTS
 ═══════════════════════════════════════════════ */
 document.addEventListener('keydown', e => {
+  const tag = document.activeElement && document.activeElement.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
   if (e.key === '1') goToPage('enroll');
   if (e.key === '2') goToPage('verify');
   if (e.key === '3') goToPage('result');

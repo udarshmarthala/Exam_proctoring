@@ -418,6 +418,27 @@ def _find_enrolled_image(student_id: str) -> str | None:
     return None
 
 
+def _get_all_enrolled_paths(student_id: str) -> list[Path]:
+    """Return all reference face photos for student (primary + angle variants)."""
+    try:
+        from app.core.config import settings
+        base = Path(settings.ENROLLED_FACES_DIR)
+    except Exception:
+        return []
+    paths: list[Path] = []
+    # Primary photo
+    for ext in ('.jpg', '.jpeg', '.png', '.webp'):
+        p = base / f"{student_id}{ext}"
+        if p.exists():
+            paths.append(p)
+            break
+    # Angle photos saved as {student_id}_angle_N.ext
+    for p in sorted(base.glob(f"{student_id}_angle_*")):
+        if p.suffix.lower() in {'.jpg', '.jpeg', '.png', '.webp'}:
+            paths.append(p)
+    return paths
+
+
 def _get_enrolled_students() -> list[dict]:
     """Return list of enrolled students {id, name} from main app registry."""
     try:
@@ -431,7 +452,7 @@ def _get_enrolled_students() -> list[dict]:
         seen: set[str] = set()
         out: list[dict] = []
         for p in sorted(base.glob("*")):
-            if p.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"} and "_id" not in p.stem:
+            if p.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"} and "_id" not in p.stem and "_angle_" not in p.stem:
                 sid = p.stem
                 if sid not in seen:
                     seen.add(sid)
@@ -457,10 +478,10 @@ async def ws_monitor(websocket: WebSocket):
     last_multiple_faces_alert: float = 0.0
     MULTIPLE_FACES_COOLDOWN_S: float = 1.0
     # Server-side re-verification state
-    reverify_last_time: float = 0.0
+    reverify_last_time: float = -1.0  # -1 means not yet initialized; set to now on first frame
     reverify_failures: int = 0
-    REVERIFY_INTERVAL_S: float = 12.0  # verify identity every 12 seconds
-    session_ref_photo_path: Path | None = None  # live photo captured at exam start
+    REVERIFY_INTERVAL_S: float = 5.0   # verify identity every 5 seconds
+    session_ref_photo_paths: list[Path] = []  # all enrolled reference photos for this student
     # Phone detection state
     phone_future = None
     phone_detect_start: float | None = None
@@ -471,7 +492,7 @@ async def ws_monitor(websocket: WebSocket):
     PHONE_CONF_THRESH = 0.30       # lowered from 0.35 for better recall
     last_phone_check_time: float = 0.0
     # Voice activity detection state
-    VOICE_THRESHOLD = 0.015
+    VOICE_THRESHOLD = 0.06
     voice_detected = False
     voice_start: float = 0.0
     VOICE_SUSTAINED_S = 1.0
@@ -515,18 +536,11 @@ async def ws_monitor(websocket: WebSocket):
             now = time_mod.time()
             if session_start is None:
                 session_start = now
+                reverify_last_time = now  # first check happens REVERIFY_INTERVAL_S after exam start
 
-            # Capture the reference photo from the very first frame of the exam (face crop only)
-            if session_ref_photo_path is None and student_id:
-                try:
-                    face_crop = _extract_face_crop(frame)
-                    if face_crop is not None:
-                        from app.core.config import settings
-                        ref_path = Path(settings.UPLOAD_DIR) / f"ref_{student_id}_{uuid_lib.uuid4().hex}.jpg"
-                        cv2.imwrite(str(ref_path), face_crop)
-                        session_ref_photo_path = ref_path
-                except Exception:
-                    pass
+            # Load all enrolled reference photos (primary + angle shots) once per session
+            if not session_ref_photo_paths and student_id:
+                session_ref_photo_paths = _get_all_enrolled_paths(student_id)
 
             monitor, err = get_monitor()
             if err is not None:
@@ -663,64 +677,92 @@ async def ws_monitor(websocket: WebSocket):
                     if len(event_log) > max_log_entries:
                         event_log.pop(0)
 
-            # Server-side periodic re-verification (every 12s against session start photo)
-            if student_id and session_ref_photo_path is not None:
+            # Server-side periodic re-verification (every 12s against all enrolled photos)
+            # Passes if the live face matches ANY of the enrolled reference photos
+            # (primary frontal + angle shots captured during enrollment).
+            REVERIFY_MAX_YAW = 30.0   # degrees; skip check if head is turned beyond this
+            REVERIFY_FAILURES_NEEDED = 2  # consecutive failures required before alerting
+            head_turned_now = result.head_pose is not None and abs(result.head_pose.yaw) > REVERIFY_MAX_YAW
+            if student_id and session_ref_photo_paths:
                 try:
                     if (now - reverify_last_time) >= REVERIFY_INTERVAL_S:
-                        reverify_last_time = now
-                        try:
-                            from app.core.config import settings
-                            probe_crop = _extract_face_crop(frame)
-                            if probe_crop is None:
-                                probe_crop = frame  # fall back to full frame if detector misses
-                            probe_path = Path(settings.UPLOAD_DIR) / f"probe_ws_{uuid_lib.uuid4().hex}.jpg"
-                            cv2.imwrite(str(probe_path), probe_crop)
-                            from deepface import DeepFace
-                            v = DeepFace.verify(
-                                img1_path=str(probe_path),
-                                img2_path=str(session_ref_photo_path),
-                                model_name=settings.DEEPFACE_MODEL,
-                                detector_backend=settings.DEEPFACE_DETECTOR,
-                                distance_metric=settings.DEEPFACE_DISTANCE_METRIC,
-                                enforce_detection=False,
-                                silent=True,
-                            )
-                            verified = bool(v.get("verified", False))
-                            distance = float(v.get("distance", 1.0))
-                            threshold = float(v.get("threshold", settings.VERIFICATION_THRESHOLD))
-                            if not verified:
-                                reverify_failures += 1
-                                screenshot_ref = _capture_screenshot(frame)
-                                pe = {
-                                    "id": str(uuid_lib.uuid4()),
-                                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                                    "event_type": "identity_mismatch",
-                                    "severity": 2,
-                                    "duration_ms": 0,
-                                    "head_yaw": None,
-                                    "head_pitch": None,
-                                    "gaze_vector": None,
-                                    "confidence_score": 1.0 - min(max(distance / max(threshold * 2, 0.001), 0.0), 1.0),
-                                    "screenshot_ref": screenshot_ref,
-                                    "dismissed": False,
-                                    "flagged_by_proctor": False,
-                                    "message": f"Identity mismatch detected (distance={distance:.4f})",
-                                }
-                                proctoring_events.append(pe)
-                                if len(proctoring_events) > 500:
-                                    proctoring_events.pop(0)
-                                alerts_to_send.append({"level": 2, "event_type": "identity_mismatch", "message": pe["message"], "id": pe["id"]})
-                            else:
-                                if reverify_failures > 0:
-                                    entry = _event_entry(now, BehaviorFlag.NORMAL, EventSeverity.RESOLVED, "Identity re-verified")
-                                    event_log.append(entry)
-                                    new_events.append(entry)
-                                reverify_failures = 0
-                        finally:
+                        if head_turned_now:
+                            # Head is turned — defer this check; don't reset the timer so
+                            # we try again on the next interval tick when facing forward.
+                            pass
+                        else:
+                            reverify_last_time = now
+                            probe_path = None
                             try:
-                                probe_path.unlink(missing_ok=True)
-                            except Exception:
-                                pass
+                                from app.core.config import settings
+                                probe_crop = _extract_face_crop(frame)
+                                if probe_crop is None:
+                                    probe_crop = frame  # fall back to full frame if detector misses
+                                probe_path = Path(settings.UPLOAD_DIR) / f"probe_ws_{uuid_lib.uuid4().hex}.jpg"
+                                cv2.imwrite(str(probe_path), probe_crop)
+                                from deepface import DeepFace
+                                # Compare against every reference photo; pass if any match
+                                verified = False
+                                best_distance = 1.0
+                                threshold = settings.VERIFICATION_THRESHOLD
+                                for ref_path in session_ref_photo_paths:
+                                    if not ref_path.exists():
+                                        continue
+                                    v = DeepFace.verify(
+                                        img1_path=str(probe_path),
+                                        img2_path=str(ref_path),
+                                        model_name=settings.DEEPFACE_MODEL,
+                                        detector_backend=settings.DEEPFACE_DETECTOR,
+                                        distance_metric=settings.DEEPFACE_DISTANCE_METRIC,
+                                        enforce_detection=False,
+                                        silent=True,
+                                    )
+                                    dist = float(v.get("distance", 1.0))
+                                    thr = float(v.get("threshold", settings.VERIFICATION_THRESHOLD))
+                                    threshold = thr
+                                    if dist < best_distance:
+                                        best_distance = dist
+                                    if bool(v.get("verified", False)):
+                                        verified = True
+                                        break
+                                distance = best_distance
+                                if not verified:
+                                    reverify_failures += 1
+                                    # Only alert after REVERIFY_FAILURES_NEEDED consecutive frontal failures
+                                    if reverify_failures >= REVERIFY_FAILURES_NEEDED:
+                                        screenshot_ref = _capture_screenshot(frame)
+                                        pe = {
+                                            "id": str(uuid_lib.uuid4()),
+                                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                                            "event_type": "identity_mismatch",
+                                            "severity": 2,
+                                            "duration_ms": 0,
+                                            "head_yaw": None,
+                                            "head_pitch": None,
+                                            "gaze_vector": None,
+                                            "confidence_score": 1.0 - min(max(distance / max(threshold * 2, 0.001), 0.0), 1.0),
+                                            "screenshot_ref": screenshot_ref,
+                                            "dismissed": False,
+                                            "flagged_by_proctor": False,
+                                            "message": f"Identity mismatch detected (distance={distance:.4f})",
+                                        }
+                                        proctoring_events.append(pe)
+                                        if len(proctoring_events) > 500:
+                                            proctoring_events.pop(0)
+                                        alerts_to_send.append({"level": 2, "event_type": "identity_mismatch", "message": pe["message"], "id": pe["id"]})
+                                        reverify_failures = 0  # reset after alerting
+                                else:
+                                    if reverify_failures > 0:
+                                        entry = _event_entry(now, BehaviorFlag.NORMAL, EventSeverity.RESOLVED, "Identity re-verified")
+                                        event_log.append(entry)
+                                        new_events.append(entry)
+                                    reverify_failures = 0
+                            finally:
+                                if probe_path is not None:
+                                    try:
+                                        probe_path.unlink(missing_ok=True)
+                                    except Exception:
+                                        pass
                 except Exception as exc:
                     try:
                         entry = _event_entry(now, BehaviorFlag.NORMAL, EventSeverity.WARNING, f"Reverify error: {exc}")
@@ -871,9 +913,4 @@ async def ws_monitor(websocket: WebSocket):
     except WebSocketDisconnect:
         pass
     finally:
-        # Clean up session reference photo
-        if session_ref_photo_path is not None:
-            try:
-                session_ref_photo_path.unlink(missing_ok=True)
-            except Exception:
-                pass
+        pass  # enrolled reference photos must persist across sessions; nothing to clean up here

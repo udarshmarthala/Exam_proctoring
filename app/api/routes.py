@@ -19,6 +19,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from typing import List
 from fastapi.responses import JSONResponse
 
 from app.agents.graph import run_verification
@@ -252,6 +253,50 @@ async def enroll_student(
 
 
 
+# ── Angle Photos ──────────────────────────────────────────────────────────────
+
+@router.post("/enroll/angles", tags=["enrollment"])
+async def enroll_angles(
+    student_id: str = Form(..., description="Student ID (must already be enrolled)"),
+    photos: List[UploadFile] = File(..., description="2–4 additional angle face photos"),
+):
+    """
+    Save additional angle reference photos for an already-enrolled student.
+    These are used during re-verification so the system recognises the student
+    from slight left/right/up head positions, reducing false identity-mismatch alerts.
+    """
+    enrolled_path = _get_enrolled_path(student_id)
+    if not enrolled_path:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Student '{student_id}' is not enrolled. Enroll first.",
+        )
+
+    ext_map = {
+        "image/jpeg": ".jpg", "image/jpg": ".jpg",
+        "image/png": ".png", "image/webp": ".webp",
+    }
+    enrolled_dir = Path(settings.ENROLLED_FACES_DIR)
+
+    # Remove existing angle photos for this student
+    for old in enrolled_dir.glob(f"{student_id}_angle_*"):
+        old.unlink(missing_ok=True)
+
+    saved = 0
+    for i, photo in enumerate(photos):
+        if photo.content_type not in ALLOWED_IMAGE_TYPES:
+            continue  # skip unsupported types silently
+        ext = ext_map.get(photo.content_type, ".jpg")
+        angle_path = enrolled_dir / f"{student_id}_angle_{i}{ext}"
+        try:
+            _save_upload(photo, angle_path)
+            saved += 1
+        except Exception as exc:
+            logger.warning("Failed to save angle photo %d for %s: %s", i, student_id, exc)
+
+    return {"success": True, "student_id": student_id, "angles_saved": saved}
+
+
 # ── Verification ──────────────────────────────────────────────────────────────
 
 @router.post("/verify", response_model=VerifyResponse, tags=["verification"])
@@ -363,7 +408,7 @@ async def list_students():
     for p in sorted(enrolled_dir.glob("*")):
         if p.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}:
             sid = p.stem
-            if "_id" not in sid and sid not in seen:
+            if "_id" not in sid and "_angle_" not in sid and sid not in seen:
                 ids_only.append(sid)
                 seen.add(sid)
     registry = _load_registry()

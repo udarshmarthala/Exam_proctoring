@@ -336,51 +336,13 @@ class BehaviorMonitor:
                 else:
                     self._yaw_warn_start = None
 
-            # ----- Pitch down > 25° sustained 2s → L1 -----
-            if not self.config.disable_pitch and not self._in_grace(now):
-                if self.head_pose_estimator.pitch_down_exceeds_warn(head_pose):
-                    if self._pitch_down_start is None:
-                        self._pitch_down_start = now
-                    elif (now - self._pitch_down_start) >= self.config.head_pitch_down_sustained_s:
-                        self._add_alert(
-                            alerts, 1, ProctoringEventType.head_turn.value,
-                            "Please look at your screen", now,
-                            duration_ms=(now - self._pitch_down_start) * 1000,
-                            head_pose=head_pose, gaze=gaze, confidence=confidence,
-                        )
-                        self._pitch_down_start = None
-                else:
-                    self._pitch_down_start = None
-                if self.head_pose_estimator.pitch_up_exceeds_warn(head_pose):
-                    if self._pitch_up_start is None:
-                        self._pitch_up_start = now
-                    elif (now - self._pitch_up_start) >= self.config.head_pitch_up_sustained_s:
-                        self._add_alert(
-                            alerts, 1, ProctoringEventType.head_turn.value,
-                            "Please look at your screen", now,
-                            duration_ms=(now - self._pitch_up_start) * 1000,
-                            head_pose=head_pose, gaze=gaze, confidence=confidence,
-                        )
-                        self._pitch_up_start = None
-                else:
-                    self._pitch_up_start = None
+            # Pitch (up/down) alerts disabled — only left/right yaw triggers alerts.
+            self._pitch_down_start = None
+            self._pitch_up_start = None
 
-            # ----- Gaze off-center > 15° sustained 1.5s → L1 -----
-            gaze_off = gaze and gaze.direction != GazeDirection.CENTER
-            if gaze_off and not self._in_grace(now):
-                if self._gaze_off_start is None:
-                    self._gaze_off_start = now
-                elif (now - self._gaze_off_start) >= self.config.gaze_sustained_s:
-                    flags.append(BehaviorFlag.LOOKING_AWAY)
-                    self._add_alert(
-                        alerts, 1, ProctoringEventType.gaze_deviation.value,
-                        "Please look at your screen", now,
-                        duration_ms=(now - self._gaze_off_start) * 1000,
-                        head_pose=head_pose, gaze=gaze, confidence=confidence,
-                    )
-                    self._gaze_off_start = None
-            else:
-                self._gaze_off_start = None
+            # Gaze-based alert disabled — "Please look at your screen" is triggered
+            # only by head-pose angle deviation (yaw > 45° sustained, see block above).
+            self._gaze_off_start = None
 
             # ----- Eye closure > 2s (not blink < 400ms) → L1 -----
             ear = gaze.eye_aspect_ratio if gaze else 1.0
